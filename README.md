@@ -28,6 +28,48 @@ click-sink detect --config examples/config.yaml --sample 500 > mapping.yaml
 click-sink run --config examples/config.yaml --mapping mapping.yaml
 ```
 
+## Local dev with Docker Compose
+
+Spin up local Kafka + ClickHouse:
+
+```bash
+docker compose up -d
+```
+
+Create the `events` topic and seed a few JSON messages:
+
+```bash
+# Topic is auto-created by init-kafka service, but you can double check:
+docker compose exec kafka kafka-topics --list --bootstrap-server kafka:29092
+
+# Seed from host (requires kafka console tools + jq installed), or run your own producer
+bash scripts/seed-kafka.sh
+```
+
+Detect schema and run the sink:
+
+```bash
+./click-sink detect --config examples/config.yaml --sample 50 > mapping.yaml
+./click-sink run --config examples/config.yaml --mapping mapping.yaml
+```
+
+Inspect inserted data in ClickHouse:
+
+```bash
+docker compose exec clickhouse clickhouse-client --query "SELECT * FROM default.events LIMIT 10"
+```
+
+Kafka UI (Redpanda Console):
+
+- Open http://localhost:8080 to browse topics and messages.
+- Default broker in UI is kafka:29092 (container network broker).
+
+Troubleshooting detect producing empty mapping:
+
+- Open the UI and confirm messages exist in the `events` topic.
+- Re-seed: `bash scripts/seed-kafka-in-docker.sh`
+- Increase timeout/samples: `./click-sink detect --config examples/config.yaml --sample 200 --timeout 30s > mapping.yaml`
+
 ## Configuration
 
 See `examples/config.yaml` for a complete example. Key sections:

@@ -21,7 +21,8 @@ type CLI struct {
 	Mapping string `help:"Path to field mapping YAML (generated or edited)" short:"m" type:"existingfile" optional:""`
 
 	Detect struct {
-		Sample int `help:"Number of messages to sample for schema detection" default:"200"`
+		Sample  int    `help:"Number of messages to sample for schema detection" default:"200"`
+		Timeout string `help:"Max time to wait for samples (e.g. 10s, 1m)" default:"15s"`
 	} `cmd:"" help:"Detect schema from Kafka and print a recommended mapping YAML to stdout"`
 
 	Run struct{} `cmd:"" help:"Run the Kafka→ClickHouse sink pipeline"`
@@ -38,9 +39,20 @@ func main() {
 
 	switch ctx.Command() {
 	case "detect":
-		mapping, err := schema.DetectAndRecommend(context.Background(), cfg, cli.Detect.Sample)
+		d := context.Background()
+		if cli.Detect.Timeout != "" {
+			if dur, err := time.ParseDuration(cli.Detect.Timeout); err == nil {
+				var cancel context.CancelFunc
+				d, cancel = context.WithTimeout(context.Background(), dur)
+				defer cancel()
+			}
+		}
+		mapping, err := schema.DetectAndRecommend(d, cfg, cli.Detect.Sample)
 		if err != nil {
 			log.Fatalf("detect schema: %v", err)
+		}
+		if len(mapping) == 0 {
+			fmt.Fprintln(os.Stderr, "No messages sampled; try increasing --sample, timeout, or ensure topic has data")
 		}
 		fmt.Println(string(mapping))
 	case "run":

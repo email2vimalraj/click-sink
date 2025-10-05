@@ -21,11 +21,15 @@ type Consumer struct {
 }
 
 func NewConsumer(cfg *config.KafkaConfig, clientID string) (*Consumer, error) {
+	return NewConsumerWithInitial(cfg, clientID, sarama.OffsetNewest)
+}
+
+func NewConsumerWithInitial(cfg *config.KafkaConfig, clientID string, initialOffset int64) (*Consumer, error) {
 	config := sarama.NewConfig()
 	config.Version = sarama.V3_5_0_0
 	config.ClientID = clientID
 	config.Consumer.Return.Errors = true
-	config.Consumer.Offsets.Initial = sarama.OffsetNewest
+	config.Consumer.Offsets.Initial = initialOffset
 	config.Metadata.Full = true
 
 	// Security
@@ -113,7 +117,7 @@ func Sample(ctx context.Context, cfg *config.KafkaConfig, n int) ([][]byte, erro
 	}
 	tempCfg := *cfg
 	tempCfg.GroupID = fmt.Sprintf("%s-detect-%d", cfg.GroupID, time.Now().UnixNano())
-	c, err := NewConsumer(&tempCfg, "click-sink-detect")
+	c, err := NewConsumerWithInitial(&tempCfg, "click-sink-detect", sarama.OffsetOldest)
 	if err != nil {
 		return nil, err
 	}

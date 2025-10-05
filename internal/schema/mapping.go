@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -45,7 +46,16 @@ func (m *Mapping) ToYAML() ([]byte, error) {
 func DetectAndRecommend(ctx context.Context, cfg *config.Config, sample int) ([]byte, error) {
 	payloads, err := kafka.Sample(ctx, &cfg.Kafka, sample)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			empty := Mapping{Columns: []MapColumn{}}
+			return empty.ToYAML()
+		}
 		return nil, err
+	}
+	if len(payloads) == 0 {
+		// Return an empty mapping document as a hint
+		empty := Mapping{Columns: []MapColumn{}}
+		return empty.ToYAML()
 	}
 	merged := make(map[string][]any)
 	for _, p := range payloads {
