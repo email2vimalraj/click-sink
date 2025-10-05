@@ -37,30 +37,6 @@ services:
         soft: 262144
         hard: 262144
 
-  init-kafka:
-    image: confluentinc/cp-kafka:7.5.1
-    depends_on:
-      - kafka
-    entrypoint: ["/bin/bash", "-lc"]
-    command: >
-      until kafka-topics --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do echo waiting for kafka; sleep 1; done; \
-      kafka-topics --create --if-not-exists --bootstrap-server kafka:29092 --replication-factor 1 --partitions 1 --topic events; \
-      sleep infinity
-
-  seed-kafka:
-    image: confluentinc/cp-kafka:7.5.1
-    depends_on:
-      - kafka
-      - init-kafka
-    entrypoint: ["/bin/bash", "-lc"]
-    command: >
-      set -euo pipefail; \
-      until kafka-topics --bootstrap-server kafka:29092 --list >/dev/null 2>&1; do echo waiting for kafka; sleep 1; done; \
-      for m in \
-      '{"user":{"id":1,"email":"a@example.com"},"event":{"ts":"2025-10-05T12:00:00Z","type":"signup","value":1}}' \
-      '{"user":{"id":2,"email":"b@example.com"},"event":{"ts":"2025-10-05T12:01:00Z","type":"purchase","value":23.5}}' \
-      '{"user":{"id":3,"email":null},"event":{"ts":"2025-10-05T12:02:00Z","type":"page_view","value":null}}'; \
-      do echo "$${m}" | kafka-console-producer --bootstrap-server kafka:29092 --topic events 1>/dev/null; echo "Produced: $${m}"; sleep 0.1; done
 
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:v2.5.1

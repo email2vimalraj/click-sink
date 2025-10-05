@@ -1,0 +1,22 @@
+columns:
+  - fieldPath: event.ts
+    column: event_ts
+    type: String
+    nullable: false
+  - fieldPath: event.type
+    column: event_type
+    type: String
+    nullable: false
+  - fieldPath: event.value
+    column: event_value
+    type: Bool
+    nullable: false
+  - fieldPath: user.email
+    column: user_email
+    type: String
+    nullable: false
+  - fieldPath: user.id
+    column: user_id
+    type: Bool
+    nullable: false
+
