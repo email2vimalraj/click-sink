@@ -1,0 +1,14 @@
+kafka:
+    brokers:
+        - localhost:9092
+    topic: events
+    groupId: ch-1
+    securityProtocol: "PLAINTEXT"
+clickhouse:
+    dsn: "clickhouse://default:@localhost:9000?database=default"
+    database: default
+    table: events
+    batchSize: 500
+    batchFlushInterval: 2s
+    insertRatePerSecond: 2
+    createTableIfMissing: true

@@ -40,15 +40,35 @@ export const api = {
   stop: () => json("/api/stop", { method: "POST" }),
   // Multi-pipeline APIs
   listPipelines: () => json<any[]>("/api/pipelines"),
-  createPipeline: (name: string) => json<{ id: string; name: string }>("/api/pipelines", { method: "POST", body: JSON.stringify({ name }) }),
+  createPipeline: (name: string) =>
+    json<{ id: string; name: string }>("/api/pipelines", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
   getPipeline: (id: string) => json<any>(`/api/pipelines/${id}`),
-  deletePipeline: (id: string) => json<any>(`/api/pipelines/${id}`, { method: "DELETE" }),
-  getPipelineConfig: (id: string) => json<Config>(`/api/pipelines/${id}/config`),
-  savePipelineConfig: (id: string, cfg: Config) => json(`/api/pipelines/${id}/config`, { method: "PUT", body: JSON.stringify(cfg) }),
-  getPipelineMapping: (id: string) => json<Mapping>(`/api/pipelines/${id}/mapping`),
-  savePipelineMapping: (id: string, m: Mapping) => json(`/api/pipelines/${id}/mapping`, { method: "PUT", body: JSON.stringify(m) }),
+  deletePipeline: (id: string) =>
+    json<any>(`/api/pipelines/${id}`, { method: "DELETE" }),
+  getPipelineConfig: (id: string) =>
+    json<Config>(`/api/pipelines/${id}/config`),
+  savePipelineConfig: (id: string, cfg: Config) =>
+    json(`/api/pipelines/${id}/config`, {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
+  getPipelineMapping: (id: string) =>
+    json<Mapping>(`/api/pipelines/${id}/mapping`),
+  savePipelineMapping: (id: string, m: Mapping) =>
+    json(`/api/pipelines/${id}/mapping`, {
+      method: "PUT",
+      body: JSON.stringify(m),
+    }),
   pipelineStatus: (id: string) => json<Status>(`/api/pipelines/${id}/status`),
-  pipelineSample: (id: string, limit = 100) => json<{ fieldPath: string; column: string; type: string }[]>(`/api/pipelines/${id}/sample?limit=${limit}`),
-  pipelineStart: (id: string) => json(`/api/pipelines/${id}/start`, { method: "POST" }),
-  pipelineStop: (id: string) => json(`/api/pipelines/${id}/stop`, { method: "POST" }),
+  pipelineSample: (id: string, limit = 100) =>
+    json<{ fieldPath: string; column: string; type: string }[]>(
+      `/api/pipelines/${id}/sample?limit=${limit}`
+    ),
+  pipelineStart: (id: string) =>
+    json(`/api/pipelines/${id}/start`, { method: "POST" }),
+  pipelineStop: (id: string) =>
+    json(`/api/pipelines/${id}/stop`, { method: "POST" }),
 };
