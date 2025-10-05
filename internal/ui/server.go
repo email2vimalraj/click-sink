@@ -23,7 +23,7 @@ type Server struct {
 	dataDir string
 	sampleN int
 	mu      sync.Mutex
-	cfg     *config.Config
+	cfg     *config.Config // legacy single-pipeline fields (kept for backward compatibility/UI page)
 	mapping *schema.Mapping
 	running bool
 	cancel  context.CancelFunc
@@ -31,10 +31,13 @@ type Server struct {
 	started time.Time
 	tpl     *template.Template
 	stats   *stats
+
+	// multi-pipeline support
+	pipelines map[string]*pipelineRuntime
 }
 
 func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
-	s := &Server{addr: addr, dataDir: dataDir, sampleN: sampleN}
+	s := &Server{addr: addr, dataDir: dataDir, sampleN: sampleN, pipelines: map[string]*pipelineRuntime{}}
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
@@ -59,6 +62,8 @@ func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
 			s.mapping = m
 		}
 	}
+	// Load existing pipelines from dataDir/pipelines/*
+	_ = s.loadPipelines()
 	return s, nil
 }
 
@@ -72,6 +77,9 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/mapping", s.handleAPIMapping)
 	mux.HandleFunc("/api/start", s.handleAPIStart)
 	mux.HandleFunc("/api/stop", s.handleAPIStop)
+	// multi-pipeline endpoints
+	mux.HandleFunc("/api/pipelines", s.handleAPIPipelines)
+	mux.HandleFunc("/api/pipelines/", s.handleAPIPipeline)
 	mux.HandleFunc("/save-mapping", s.handleSaveMapping)
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/stop", s.handleStop)
@@ -491,4 +499,380 @@ func (s *Server) cors(w http.ResponseWriter) {
 func (s *Server) corsJSON(w http.ResponseWriter) {
 	s.cors(w)
 	w.Header().Set("Content-Type", "application/json")
+}
+
+// --- Multi-pipeline types and helpers ---
+type pipelineRuntime struct {
+	id      string
+	name    string
+	dir     string
+	cfg     *config.Config
+	mapping *schema.Mapping
+	running bool
+	cancel  context.CancelFunc
+	lastErr string
+	started time.Time
+	stats   *stats
+}
+
+func (s *Server) loadPipelines() error {
+	base := filepath.Join(s.dataDir, "pipelines")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		id := e.Name()
+		dir := filepath.Join(base, id)
+		name := id
+		if b, err := os.ReadFile(filepath.Join(dir, "name")); err == nil {
+			name = string(b)
+		}
+		var cfg *config.Config
+		if _, err := os.Stat(filepath.Join(dir, "config.yaml")); err == nil {
+			if c2, err2 := config.Load(filepath.Join(dir, "config.yaml")); err2 == nil {
+				cfg = c2
+			}
+		}
+		var mp *schema.Mapping
+		if b, err := os.ReadFile(filepath.Join(dir, "mapping.yaml")); err == nil {
+			if m2, err2 := schema.ParseMapping(b); err2 == nil {
+				mp = m2
+			}
+		}
+		s.pipelines[id] = &pipelineRuntime{id: id, name: name, dir: dir, cfg: cfg, mapping: mp, stats: &stats{}}
+	}
+	return nil
+}
+
+func (s *Server) createPipeline(name string) (*pipelineRuntime, error) {
+	id := sanitizeID(name)
+	base := filepath.Join(s.dataDir, "pipelines")
+	dir := filepath.Join(base, id)
+	if _, err := os.Stat(dir); err == nil {
+		// ensure unique
+		id = id + "-" + strconv.FormatInt(time.Now().Unix(), 10)
+		dir = filepath.Join(base, id)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	_ = os.WriteFile(filepath.Join(dir, "name"), []byte(name), 0o644)
+	pr := &pipelineRuntime{id: id, name: name, dir: dir, stats: &stats{}}
+	s.mu.Lock()
+	s.pipelines[id] = pr
+	s.mu.Unlock()
+	return pr, nil
+}
+
+func sanitizeID(s string) string {
+	out := make([]rune, 0, len(s))
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
+			out = append(out, r)
+		} else if r == ' ' {
+			out = append(out, '-')
+		} else {
+			out = append(out, '-')
+		}
+	}
+	if len(out) == 0 {
+		return "pl-" + strconv.FormatInt(time.Now().Unix(), 10)
+	}
+	return string(out)
+}
+
+// --- Multi-pipeline handlers ---
+func (s *Server) handleAPIPipelines(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.Lock()
+		list := make([]any, 0, len(s.pipelines))
+		for id, p := range s.pipelines {
+			total := int64(0)
+			if p.stats != nil {
+				total = p.stats.TotalRows()
+			}
+			list = append(list, map[string]any{
+				"id": id, "name": p.name, "running": p.running, "lastErr": p.lastErr, "started": p.started, "totalRows": total,
+			})
+		}
+		s.mu.Unlock()
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(list)
+	case http.MethodPost:
+		var req struct {
+			Name string `json:"name"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if req.Name == "" {
+			req.Name = "pipeline"
+		}
+		pr, err := s.createPipeline(req.Name)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	base := "/api/pipelines/"
+	rest := r.URL.Path[len(base):]
+	if rest == "" {
+		http.NotFound(w, r)
+		return
+	}
+	parts := splitPath(rest)
+	if len(parts) == 0 {
+		http.NotFound(w, r)
+		return
+	}
+	id := parts[0]
+	s.mu.Lock()
+	pr := s.pipelines[id]
+	s.mu.Unlock()
+	if pr == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	// Route by subresource
+	if len(parts) == 1 {
+		switch r.Method {
+		case http.MethodGet:
+			total := int64(0)
+			if pr.stats != nil {
+				total = pr.stats.TotalRows()
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name, "running": pr.running, "lastErr": pr.lastErr, "started": pr.started, "totalRows": total})
+			return
+		case http.MethodDelete:
+			if pr.running && pr.cancel != nil {
+				pr.cancel()
+			}
+			// remove dir
+			_ = os.RemoveAll(pr.dir)
+			s.mu.Lock()
+			delete(s.pipelines, id)
+			s.mu.Unlock()
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+			return
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+	}
+	sub := parts[1]
+	switch sub {
+	case "config":
+		switch r.Method {
+		case http.MethodGet:
+			s.corsJSON(w)
+			if pr.cfg == nil {
+				_ = json.NewEncoder(w).Encode(&config.Config{})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(pr.cfg)
+		case http.MethodPut:
+			var cfg config.Config
+			if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			by, err := yamlMarshal(&cfg)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(pr.dir, "config.yaml"), by, 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.mu.Lock()
+			pr.cfg = &cfg
+			s.mu.Unlock()
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	case "mapping":
+		switch r.Method {
+		case http.MethodGet:
+			s.corsJSON(w)
+			if pr.mapping == nil {
+				_ = json.NewEncoder(w).Encode(&schema.Mapping{})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(pr.mapping)
+		case http.MethodPut:
+			var mp schema.Mapping
+			if err := json.NewDecoder(r.Body).Decode(&mp); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			by, err := mp.ToYAML()
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(pr.dir, "mapping.yaml"), by, 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.mu.Lock()
+			pr.mapping = &mp
+			s.mu.Unlock()
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	case "status":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		total := int64(0)
+		lastBatch := 0
+		lastAt := time.Time{}
+		if pr.stats != nil {
+			total = pr.stats.TotalRows()
+			lastBatch = pr.stats.LastBatch()
+			lastAt = pr.stats.LastBatchAt()
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]any{"running": pr.running, "started": pr.started, "lastErr": pr.lastErr, "totalRows": total, "lastBatch": lastBatch, "lastBatchAt": lastAt})
+	case "start":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if pr.running {
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "already running"})
+			return
+		}
+		if pr.cfg == nil || pr.mapping == nil {
+			http.Error(w, "config and mapping required", 400)
+			return
+		}
+		pr.stats = &stats{}
+		p, err := pipeline.NewWithObserver(pr.cfg, pr.mapping, pr.stats)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		s.mu.Lock()
+		pr.cancel = cancel
+		pr.running = true
+		pr.started = time.Now()
+		pr.lastErr = ""
+		s.mu.Unlock()
+		go func() {
+			if err := p.Run(ctx); err != nil {
+				s.mu.Lock()
+				pr.lastErr = err.Error()
+				pr.running = false
+				s.mu.Unlock()
+			} else {
+				s.mu.Lock()
+				pr.running = false
+				s.mu.Unlock()
+			}
+		}()
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+	case "stop":
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if pr.cancel != nil {
+			pr.cancel()
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "stopping"})
+	case "sample":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if pr.cfg == nil {
+			http.Error(w, "save config first", 400)
+			return
+		}
+		n := s.sampleN
+		if q := r.URL.Query().Get("limit"); q != "" {
+			if v, err := strconv.Atoi(q); err == nil && v > 0 {
+				n = v
+			}
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+		defer cancel()
+		y, err := schema.DetectAndRecommend(ctx, pr.cfg, n)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		mp, err := schema.ParseMapping(y)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		type field struct{ FieldPath, Column, Type string }
+		out := make([]field, 0, len(mp.Columns))
+		for _, c := range mp.Columns {
+			out = append(out, field{c.FieldPath, c.Column, c.Type})
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(out)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func splitPath(s string) []string {
+	var parts []string
+	cur := ""
+	for i := 0; i < len(s); i++ {
+		if s[i] == '/' {
+			if cur != "" {
+				parts = append(parts, cur)
+				cur = ""
+			}
+		} else {
+			cur += string(s[i])
+		}
+	}
+	if cur != "" {
+		parts = append(parts, cur)
+	}
+	return parts
 }
