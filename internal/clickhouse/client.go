@@ -36,9 +36,12 @@ func (c *Client) EnsureTable(ctx context.Context, table string, columns []Column
 	}
 	cols := make([]string, 0, len(columns))
 	for _, col := range columns {
-		cols = append(cols, fmt.Sprintf("`%s` %s", col.Name, col.Type))
+		cols = append(cols, fmt.Sprintf("`%s` %s", escapeIdent(col.Name), col.Type))
 	}
-	ddl := fmt.Sprintf("CREATE TABLE IF NOT EXISTS %s.%s (%s) ENGINE = MergeTree ORDER BY tuple()", c.cfg.Database, table, strings.Join(cols, ", "))
+	ddl := fmt.Sprintf(
+		"CREATE TABLE IF NOT EXISTS `%s`.`%s` (%s) ENGINE = MergeTree ORDER BY tuple()",
+		escapeIdent(c.cfg.Database), escapeIdent(table), strings.Join(cols, ", "),
+	)
 	return c.conn.Exec(ctx, ddl)
 }
 
@@ -55,9 +58,13 @@ func (c *Client) InsertBatch(ctx context.Context, table string, columns []Column
 	}
 	names := make([]string, len(columns))
 	for i, col := range columns {
-		names[i] = col.Name
+		names[i] = fmt.Sprintf("`%s`", escapeIdent(col.Name))
 	}
-	batch, err := c.conn.PrepareBatch(ctx, fmt.Sprintf("INSERT INTO %s.%s (%s)", c.cfg.Database, table, strings.Join(names, ",")))
+	stmt := fmt.Sprintf(
+		"INSERT INTO `%s`.`%s` (%s)",
+		escapeIdent(c.cfg.Database), escapeIdent(table), strings.Join(names, ","),
+	)
+	batch, err := c.conn.PrepareBatch(ctx, stmt)
 	if err != nil {
 		return err
 	}
@@ -84,4 +91,9 @@ func parseDSN(dsn string) (*ch.Options, error) {
 		opts.DialTimeout = 5 * time.Second
 	}
 	return opts, nil
+}
+
+// escapeIdent escapes backticks in identifiers to safely wrap them with backticks.
+func escapeIdent(s string) string {
+	return strings.ReplaceAll(s, "`", "``")
 }

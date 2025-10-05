@@ -14,10 +14,11 @@ import (
 	"github.com/yourname/click-sink/internal/config"
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
+	"github.com/yourname/click-sink/internal/ui"
 )
 
 type CLI struct {
-	Config  string `help:"Path to pipeline config YAML" required:"" short:"c" type:"existingfile"`
+	Config  string `help:"Path to pipeline config YAML" short:"c" type:"existingfile"`
 	Mapping string `help:"Path to field mapping YAML (generated or edited)" short:"m" type:"existingfile" optional:""`
 
 	Detect struct {
@@ -26,19 +27,27 @@ type CLI struct {
 	} `cmd:"" help:"Detect schema from Kafka and print a recommended mapping YAML to stdout"`
 
 	Run struct{} `cmd:"" help:"Run the Kafka→ClickHouse sink pipeline"`
+
+	UI struct {
+		Listen string `help:"Listen address for the UI server" default:":8081"`
+		Data   string `help:"Data directory to store config and mapping" default:".ui-data"`
+		Sample int    `help:"Sample size for detection" default:"100"`
+	} `cmd:"" help:"Launch web UI for configuring and running pipelines"`
 }
 
 func main() {
 	var cli CLI
 	ctx := kong.Parse(&cli, kong.Name("click-sink"), kong.Description("Kafka → ClickHouse sink"))
 
-	cfg, err := config.Load(cli.Config)
-	if err != nil {
-		log.Fatalf("load config: %v", err)
-	}
-
 	switch ctx.Command() {
 	case "detect":
+		if cli.Config == "" {
+			log.Fatalf("--config is required for detect")
+		}
+		cfg, err := config.Load(cli.Config)
+		if err != nil {
+			log.Fatalf("load config: %v", err)
+		}
 		d := context.Background()
 		if cli.Detect.Timeout != "" {
 			if dur, err := time.ParseDuration(cli.Detect.Timeout); err == nil {
@@ -56,8 +65,15 @@ func main() {
 		}
 		fmt.Println(string(mapping))
 	case "run":
+		if cli.Config == "" {
+			log.Fatalf("--config is required for run")
+		}
 		if cli.Mapping == "" {
 			log.Fatalf("--mapping is required for run")
+		}
+		cfg, err := config.Load(cli.Config)
+		if err != nil {
+			log.Fatalf("load config: %v", err)
 		}
 		m, err := os.ReadFile(cli.Mapping)
 		if err != nil {
@@ -82,6 +98,18 @@ func main() {
 		}()
 		if err := p.Run(ctx); err != nil {
 			log.Fatalf("pipeline error: %v", err)
+		}
+	case "ui":
+		// Launch UI server
+		// Embed templates via os.DirFS
+		tfs := os.DirFS("internal/ui/templates")
+		srv, err := ui.New(cli.UI.Listen, cli.UI.Data, cli.UI.Sample, tfs)
+		if err != nil {
+			log.Fatalf("ui: %v", err)
+		}
+		log.Printf("UI listening on %s", cli.UI.Listen)
+		if err := srv.Start(); err != nil {
+			log.Fatalf("ui: %v", err)
 		}
 	default:
 		time.Sleep(0)

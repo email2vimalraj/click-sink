@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>click-sink UI</title>
+    <style>
+      body {
+        font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+        margin: 2rem;
+      }
+      input,
+      select,
+      textarea {
+        padding: 0.4rem;
+        margin: 0.2rem 0;
+        width: 100%;
+        max-width: 40rem;
+      }
+      .row {
+        display: flex;
+        gap: 1rem;
+      }
+      .row > div {
+        flex: 1;
+      }
+      button {
+        padding: 0.5rem 0.9rem;
+        margin-right: 0.5rem;
+      }
+      pre {
+        background: #f7f7f7;
+        padding: 0.7rem;
+      }
+    </style>
+    <script>
+      async function refreshStatus() {
+        const r = await fetch("/api/status");
+        const j = await r.json();
+        document.getElementById("status").textContent = j.running
+          ? "running"
+          : "stopped";
+        document.getElementById("lastErr").textContent = j.lastErr || "-";
+      }
+      setInterval(refreshStatus, 2000);
+      window.onload = refreshStatus;
+    </script>
+  </head>
+  <body>
+    <h1>click-sink</h1>
+    <p>
+      Status: <strong id="status">-</strong> | Last error:
+      <span id="lastErr">-</span>
+    </p>
+
+    <h2>1) Configure</h2>
+    <form method="post" action="/save-config">
+      <div class="row">
+        <div>
+          <h3>Kafka</h3>
+          <label>Brokers (comma-separated)</label>
+          <input
+            name="kafka_brokers"
+            placeholder="localhost:9092"
+            value="{{if .Cfg}}{{index .Cfg.Kafka.Brokers 0}}{{end}}"
+          />
+          <label>Topic</label>
+          <input
+            name="kafka_topic"
+            value="{{if .Cfg}}{{.Cfg.Kafka.Topic}}{{end}}"
+          />
+          <label>Group ID</label>
+          <input
+            name="kafka_group"
+            value="{{if .Cfg}}{{.Cfg.Kafka.GroupID}}{{end}}"
+          />
+          <label>Security Protocol</label>
+          <input
+            name="kafka_security"
+            placeholder="PLAINTEXT|SASL_SSL"
+            value="{{if .Cfg}}{{.Cfg.Kafka.SecurityProtocol}}{{end}}"
+          />
+          <label>SASL User</label>
+          <input name="kafka_sasl_user" value="" />
+          <label>SASL Pass</label>
+          <input name="kafka_sasl_pass" value="" />
+          <label>SASL Mechanism</label>
+          <input name="kafka_sasl_mech" value="" />
+        </div>
+        <div>
+          <h3>ClickHouse</h3>
+          <label>DSN</label>
+          <input
+            name="ch_dsn"
+            placeholder="clickhouse://default:@localhost:9000?database=default"
+            value="{{if .Cfg}}{{.Cfg.ClickHouse.DSN}}{{end}}"
+          />
+          <label>Database</label>
+          <input
+            name="ch_db"
+            value="{{if .Cfg}}{{.Cfg.ClickHouse.Database}}{{end}}"
+          />
+          <label>Table</label>
+          <input
+            name="ch_table"
+            value="{{if .Cfg}}{{.Cfg.ClickHouse.Table}}{{end}}"
+          />
+          <label>Batch Size</label>
+          <input
+            name="ch_batch"
+            value="{{if .Cfg}}{{.Cfg.ClickHouse.BatchSize}}{{end}}"
+          />
+          <label>Flush Interval (e.g., 2s)</label>
+          <input
+            name="ch_flush"
+            value="{{if .Cfg}}{{.Cfg.ClickHouse.BatchFlushInterval}}{{end}}"
+          />
+          <label>Insert Rate/sec (0=unlimited)</label>
+          <input
+            name="ch_rate"
+            value="{{if .Cfg}}{{.Cfg.ClickHouse.InsertRatePerSec}}{{end}}"
+          />
+        </div>
+      </div>
+      <button type="submit">Save Config</button>
+    </form>
+
+    <h2>2) Detect sample and generate mapping</h2>
+    <form method="post" action="/sample">
+      <button type="submit">Detect & Load Suggested Mapping</button>
+    </form>
+
+    <h2>3) Review/Edit Mapping</h2>
+    <form method="post" action="/save-mapping">
+      <textarea name="mapping_yaml" rows="14">
+{{if .Mapping}}{{printf "%s" (.Mapping | toYAML)}}{{end}}</textarea
+      >
+      <div>
+        <button type="submit">Save Mapping</button>
+      </div>
+    </form>
+
+    <h2>4) Run</h2>
+    <form method="post" action="/start" style="display: inline">
+      <button type="submit">Start</button>
+    </form>
+    <form method="post" action="/stop" style="display: inline">
+      <button type="submit">Stop</button>
+    </form>
+  </body>
+</html>

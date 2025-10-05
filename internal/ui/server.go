@@ -1,0 +1,277 @@
+package ui
+
+import (
+	"context"
+	"encoding/json"
+	"html/template"
+	"io/fs"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/yourname/click-sink/internal/config"
+	"github.com/yourname/click-sink/internal/pipeline"
+	"github.com/yourname/click-sink/internal/schema"
+	"gopkg.in/yaml.v3"
+)
+
+type Server struct {
+	addr    string
+	dataDir string
+	sampleN int
+	mu      sync.Mutex
+	cfg     *config.Config
+	mapping *schema.Mapping
+	running bool
+	cancel  context.CancelFunc
+	lastErr string
+	started time.Time
+	tpl     *template.Template
+}
+
+func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
+	s := &Server{addr: addr, dataDir: dataDir, sampleN: sampleN}
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return nil, err
+	}
+	// Load templates
+	funcMap := template.FuncMap{"toYAML": func(m *schema.Mapping) string { b, _ := yaml.Marshal(m); return string(b) }}
+	t, err := template.New("").Funcs(funcMap).ParseFS(tplFS, "*.html")
+	if err != nil {
+		return nil, err
+	}
+	s.tpl = t
+	// Try load existing config/mapping
+	if b, err := os.ReadFile(filepath.Join(dataDir, "config.yaml")); err == nil {
+		if cfg, err2 := config.Load(filepath.Join(dataDir, "config.yaml")); err2 == nil {
+			s.cfg = cfg
+		} else {
+			_ = err2
+		}
+		_ = b
+	}
+	if b, err := os.ReadFile(filepath.Join(dataDir, "mapping.yaml")); err == nil {
+		if m, err2 := schema.ParseMapping(b); err2 == nil {
+			s.mapping = m
+		}
+	}
+	return s, nil
+}
+
+func (s *Server) routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/save-config", s.handleSaveConfig)
+	mux.HandleFunc("/sample", s.handleSample)
+	mux.HandleFunc("/save-mapping", s.handleSaveMapping)
+	mux.HandleFunc("/start", s.handleStart)
+	mux.HandleFunc("/stop", s.handleStop)
+	mux.HandleFunc("/api/status", s.handleStatus)
+	return mux
+}
+
+func (s *Server) Start() error { return http.ListenAndServe(s.addr, s.routes()) }
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	data := struct {
+		Cfg     *config.Config
+		Mapping *schema.Mapping
+		Running bool
+		Started time.Time
+		LastErr string
+	}{s.cfg, s.mapping, s.running, s.started, s.lastErr}
+	s.mu.Unlock()
+	_ = s.tpl.ExecuteTemplate(w, "index.html", data)
+}
+
+func (s *Server) handleSaveConfig(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	cfg := &config.Config{
+		Kafka: config.KafkaConfig{
+			Brokers:          splitCSV(r.FormValue("kafka_brokers")),
+			Topic:            r.FormValue("kafka_topic"),
+			GroupID:          r.FormValue("kafka_group"),
+			SecurityProtocol: r.FormValue("kafka_security"),
+			SASLUsername:     r.FormValue("kafka_sasl_user"),
+			SASLPassword:     r.FormValue("kafka_sasl_pass"),
+			SASLMechanism:    r.FormValue("kafka_sasl_mech"),
+		},
+		ClickHouse: config.ClickHouseConfig{
+			DSN:                  r.FormValue("ch_dsn"),
+			Database:             r.FormValue("ch_db"),
+			Table:                r.FormValue("ch_table"),
+			BatchSize:            atoiDefault(r.FormValue("ch_batch"), 500),
+			BatchFlushInterval:   r.FormValue("ch_flush"),
+			InsertRatePerSec:     atoiDefault(r.FormValue("ch_rate"), 0),
+			CreateTableIfMissing: true,
+		},
+	}
+	// Validate via Load marshaling path
+	b, err := yamlMarshal(cfg)
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(s.dataDir, "config.yaml"), b, 0o644); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.mu.Lock()
+	s.cfg = cfg
+	s.mu.Unlock()
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleSample(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	if cfg == nil {
+		http.Error(w, "save config first", 400)
+		return
+	}
+	// Run detect and set mapping
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	m, err := schema.DetectAndRecommend(ctx, cfg, s.sampleN)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	mp, err := schema.ParseMapping(m)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.mu.Lock()
+	s.mapping = mp
+	s.mu.Unlock()
+	if err := os.WriteFile(filepath.Join(s.dataDir, "mapping.yaml"), m, 0o644); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleSaveMapping(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	y := r.FormValue("mapping_yaml")
+	mp, err := schema.ParseMapping([]byte(y))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(s.dataDir, "mapping.yaml"), []byte(y), 0o644); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.mu.Lock()
+	s.mapping = mp
+	s.mu.Unlock()
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	cfg := s.cfg
+	mp := s.mapping
+	s.mu.Unlock()
+	if cfg == nil || mp == nil {
+		http.Error(w, "config and mapping required", 400)
+		return
+	}
+	p, err := pipeline.New(cfg, mp)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	s.cancel = cancel
+	s.running = true
+	s.started = time.Now()
+	s.lastErr = ""
+	s.mu.Unlock()
+	go func() {
+		if err := p.Run(ctx); err != nil {
+			s.mu.Lock()
+			s.lastErr = err.Error()
+			s.running = false
+			s.mu.Unlock()
+		} else {
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
+		}
+	}()
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	resp := struct {
+		Running bool      `json:"running"`
+		Started time.Time `json:"started"`
+		LastErr string    `json:"lastErr"`
+	}{s.running, s.started, s.lastErr}
+	s.mu.Unlock()
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// helpers
+func splitCSV(s string) []string {
+	var out []string
+	cur := ""
+	for _, r := range s {
+		if r == ',' {
+			if cur != "" {
+				out = append(out, cur)
+				cur = ""
+			}
+			continue
+		}
+		if r == ' ' || r == '\n' || r == '\t' {
+			continue
+		}
+		cur += string(r)
+	}
+	if cur != "" {
+		out = append(out, cur)
+	}
+	return out
+}
+
+func atoiDefault(s string, d int) int {
+	if v, err := strconv.Atoi(s); err == nil {
+		return v
+	}
+	return d
+}
+
+func yamlMarshal(cfg *config.Config) ([]byte, error) { return yaml.Marshal(cfg) }
