@@ -1,0 +1,4 @@
+click-sink
+bin/
+*.log
+.DS_Store
