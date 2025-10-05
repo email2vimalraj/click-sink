@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/yourname/click-sink/internal/clickhouse"
@@ -19,6 +20,16 @@ type Pipeline struct {
 	batchSize  int
 	flushEvery time.Duration
 	insertRate int // inserts/sec (0 = unlimited)
+	obs        Observer
+	totalRows  int64
+}
+
+// Observer provides callbacks for pipeline events.
+type Observer interface {
+	OnStart()
+	OnBatchInserted(batchRows int, totalRows int64, at time.Time)
+	OnError(err error)
+	OnStop()
 }
 
 func New(cfg *config.Config, m *schema.Mapping) (*Pipeline, error) {
@@ -30,14 +41,30 @@ func New(cfg *config.Config, m *schema.Mapping) (*Pipeline, error) {
 	return &Pipeline{cfg: cfg, mapg: m, ch: client, batchSize: cfg.ClickHouse.BatchSize, flushEvery: dur, insertRate: cfg.ClickHouse.InsertRatePerSec}, nil
 }
 
+// NewWithObserver constructs a Pipeline with an observer for metrics.
+func NewWithObserver(cfg *config.Config, m *schema.Mapping, obs Observer) (*Pipeline, error) {
+	p, err := New(cfg, m)
+	if err != nil {
+		return nil, err
+	}
+	p.obs = obs
+	return p, nil
+}
+
 func (p *Pipeline) Run(ctx context.Context) error {
 	defer p.ch.Close()
+	if p.obs != nil {
+		p.obs.OnStart()
+	}
 	// Ensure table
 	cols := make([]clickhouse.Column, len(p.mapg.Columns))
 	for i, c := range p.mapg.Columns {
 		cols[i] = clickhouse.Column{Name: c.Column, Type: c.Type}
 	}
 	if err := p.ch.EnsureTable(ctx, p.cfg.ClickHouse.Table, cols); err != nil {
+		if p.obs != nil {
+			p.obs.OnError(err)
+		}
 		return err
 	}
 
@@ -58,7 +85,17 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 		r := rows
 		rows = make([]clickhouse.Row, 0, p.batchSize)
-		return p.ch.InsertBatch(ctx, p.cfg.ClickHouse.Table, cols, r)
+		if err := p.ch.InsertBatch(ctx, p.cfg.ClickHouse.Table, cols, r); err != nil {
+			if p.obs != nil {
+				p.obs.OnError(err)
+			}
+			return err
+		}
+		total := atomic.AddInt64(&p.totalRows, int64(len(r)))
+		if p.obs != nil {
+			p.obs.OnBatchInserted(len(r), total, time.Now())
+		}
+		return nil
 	}
 
 	// Rate limiter: tokens per second
@@ -72,17 +109,31 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return flush()
+			err := flush()
+			if p.obs != nil {
+				p.obs.OnStop()
+			}
+			return err
 		case err := <-errCh:
+			if p.obs != nil {
+				p.obs.OnError(err)
+			}
 			return err
 		case <-flushTimer.C:
 			if err := flush(); err != nil {
+				if p.obs != nil {
+					p.obs.OnError(err)
+				}
 				return err
 			}
 			flushTimer.Reset(p.flushEvery)
 		case m, ok := <-msgs:
 			if !ok {
-				return flush()
+				err := flush()
+				if p.obs != nil {
+					p.obs.OnStop()
+				}
+				return err
 			}
 			row, ok := p.mapMessage(m.Value)
 			if !ok {

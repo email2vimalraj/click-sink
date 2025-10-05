@@ -40,9 +40,70 @@
           ? "running"
           : "stopped";
         document.getElementById("lastErr").textContent = j.lastErr || "-";
+        document.getElementById("totalRows").textContent = j.totalRows || 0;
+        document.getElementById("lastBatch").textContent = j.lastBatch || 0;
+        document.getElementById("lastBatchAt").textContent =
+          j.lastBatchAt || "-";
       }
       setInterval(refreshStatus, 2000);
       window.onload = refreshStatus;
+
+      async function loadSample() {
+        const r = await fetch("/api/sample?limit=100");
+        if (!r.ok) {
+          alert("Failed to load sample: " + (await r.text()));
+          return;
+        }
+        const fields = await r.json();
+        const tbody = document.getElementById("sampleFields");
+        tbody.innerHTML = "";
+        for (const f of fields) {
+          const tr = document.createElement("tr");
+          tr.innerHTML = `
+            <td><code>${f.fieldPath}</code></td>
+            <td><input value="${f.column}" data-path="${
+            f.fieldPath
+          }" class="colName"/></td>
+            <td>
+              <select class="colType">
+                ${[
+                  "String",
+                  "Int64",
+                  "Float64",
+                  "Bool",
+                  "Nullable(String)",
+                  "Nullable(Int64)",
+                  "Nullable(Float64)",
+                  "Nullable(Bool)",
+                ]
+                  .map(
+                    (t) =>
+                      `<option ${t === f.type ? "selected" : ""}>${t}</option>`
+                  )
+                  .join("")}
+              </select>
+            </td>
+            <td><button type="button" onclick="addMappingRow(this)">Add</button></td>
+          `;
+          tbody.appendChild(tr);
+        }
+      }
+
+      function addMappingRow(btn) {
+        const tr = btn.closest("tr");
+        const fieldPath = tr.querySelector("code").textContent;
+        const column = tr.querySelector(".colName").value;
+        const type = tr.querySelector(".colType").value;
+        // Append to YAML textarea minimally
+        const ta = document.querySelector("textarea[name='mapping_yaml']");
+        if (!ta.value.trim()) {
+          ta.value = "columns:\n";
+        }
+        if (!ta.value.trim().startsWith("columns:")) {
+          ta.value = "columns:\n" + ta.value;
+        }
+        ta.value += `  - fieldPath: ${fieldPath}\n    column: ${column}\n    type: ${type}\n`;
+      }
     </script>
   </head>
   <body>
@@ -50,6 +111,10 @@
     <p>
       Status: <strong id="status">-</strong> | Last error:
       <span id="lastErr">-</span>
+    </p>
+    <p>
+      Total rows: <strong id="totalRows">0</strong> | Last batch:
+      <strong id="lastBatch">0</strong> @ <span id="lastBatchAt">-</span>
     </p>
 
     <h2>1) Configure</h2>
@@ -128,6 +193,21 @@
     <form method="post" action="/sample">
       <button type="submit">Detect & Load Suggested Mapping</button>
     </form>
+    <p>
+      Or preview fields and add selectively:
+      <button type="button" onclick="loadSample()">Load Sample Fields</button>
+    </p>
+    <table border="1" cellpadding="6" cellspacing="0">
+      <thead>
+        <tr>
+          <th>Field Path</th>
+          <th>Column</th>
+          <th>Type</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="sampleFields"></tbody>
+    </table>
 
     <h2>3) Review/Edit Mapping</h2>
     <form method="post" action="/save-mapping">

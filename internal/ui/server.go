@@ -30,6 +30,7 @@ type Server struct {
 	lastErr string
 	started time.Time
 	tpl     *template.Template
+	stats   *stats
 }
 
 func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
@@ -66,6 +67,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/", s.handleIndex)
 	mux.HandleFunc("/save-config", s.handleSaveConfig)
 	mux.HandleFunc("/sample", s.handleSample)
+	mux.HandleFunc("/api/sample", s.handleSampleJSON)
 	mux.HandleFunc("/save-mapping", s.handleSaveMapping)
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/stop", s.handleStop)
@@ -195,7 +197,9 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "config and mapping required", 400)
 		return
 	}
-	p, err := pipeline.New(cfg, mp)
+	// attach observer for metrics
+	s.stats = &stats{}
+	p, err := pipeline.NewWithObserver(cfg, mp, s.stats)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -234,11 +238,20 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
+	st := s.stats
 	resp := struct {
-		Running bool      `json:"running"`
-		Started time.Time `json:"started"`
-		LastErr string    `json:"lastErr"`
-	}{s.running, s.started, s.lastErr}
+		Running     bool      `json:"running"`
+		Started     time.Time `json:"started"`
+		LastErr     string    `json:"lastErr"`
+		TotalRows   int64     `json:"totalRows"`
+		LastBatch   int       `json:"lastBatch"`
+		LastBatchAt time.Time `json:"lastBatchAt"`
+	}{s.running, s.started, s.lastErr, 0, 0, time.Time{}}
+	if st != nil {
+		resp.TotalRows = st.TotalRows()
+		resp.LastBatch = st.LastBatch()
+		resp.LastBatchAt = st.LastBatchAt()
+	}
 	s.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
@@ -275,3 +288,66 @@ func atoiDefault(s string, d int) int {
 }
 
 func yamlMarshal(cfg *config.Config) ([]byte, error) { return yaml.Marshal(cfg) }
+
+// Sampling JSON endpoint: returns suggested fields from sample payloads
+func (s *Server) handleSampleJSON(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	cfg := s.cfg
+	s.mu.Unlock()
+	if cfg == nil {
+		http.Error(w, "save config first", 400)
+		return
+	}
+	n := s.sampleN
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if v, err := strconv.Atoi(q); err == nil && v > 0 {
+			n = v
+		}
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	// Reuse detection to get recommended field list
+	y, err := schema.DetectAndRecommend(ctx, cfg, n)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	mp, err := schema.ParseMapping(y)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	type field struct {
+		FieldPath string `json:"fieldPath"`
+		Column    string `json:"column"`
+		Type      string `json:"type"`
+	}
+	out := make([]field, 0, len(mp.Columns))
+	for _, c := range mp.Columns {
+		out = append(out, field{FieldPath: c.FieldPath, Column: c.Column, Type: c.Type})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
+}
+
+// stats implements pipeline.Observer for UI metrics
+type stats struct {
+	mu          sync.Mutex
+	totalRows   int64
+	lastBatch   int
+	lastBatchAt time.Time
+}
+
+func (s *stats) OnStart()      {}
+func (s *stats) OnError(error) {}
+func (s *stats) OnStop()       {}
+func (s *stats) OnBatchInserted(batchRows int, totalRows int64, at time.Time) {
+	s.mu.Lock()
+	s.totalRows = totalRows
+	s.lastBatch = batchRows
+	s.lastBatchAt = at
+	s.mu.Unlock()
+}
+func (s *stats) TotalRows() int64       { s.mu.Lock(); defer s.mu.Unlock(); return s.totalRows }
+func (s *stats) LastBatch() int         { s.mu.Lock(); defer s.mu.Unlock(); return s.lastBatch }
+func (s *stats) LastBatchAt() time.Time { s.mu.Lock(); defer s.mu.Unlock(); return s.lastBatchAt }
