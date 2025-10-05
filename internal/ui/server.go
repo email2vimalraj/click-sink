@@ -68,11 +68,15 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/save-config", s.handleSaveConfig)
 	mux.HandleFunc("/sample", s.handleSample)
 	mux.HandleFunc("/api/sample", s.handleSampleJSON)
+	mux.HandleFunc("/api/config", s.handleAPIConfig)
+	mux.HandleFunc("/api/mapping", s.handleAPIMapping)
+	mux.HandleFunc("/api/start", s.handleAPIStart)
+	mux.HandleFunc("/api/stop", s.handleAPIStop)
 	mux.HandleFunc("/save-mapping", s.handleSaveMapping)
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/stop", s.handleStop)
 	mux.HandleFunc("/api/status", s.handleStatus)
-	return mux
+	return s.withCORS(mux)
 }
 
 func (s *Server) Start() error { return http.ListenAndServe(s.addr, s.routes()) }
@@ -351,3 +355,140 @@ func (s *stats) OnBatchInserted(batchRows int, totalRows int64, at time.Time) {
 func (s *stats) TotalRows() int64       { s.mu.Lock(); defer s.mu.Unlock(); return s.totalRows }
 func (s *stats) LastBatch() int         { s.mu.Lock(); defer s.mu.Unlock(); return s.lastBatch }
 func (s *stats) LastBatchAt() time.Time { s.mu.Lock(); defer s.mu.Unlock(); return s.lastBatchAt }
+
+// --- JSON API for Next.js ---
+
+// handleAPIConfig supports GET (return JSON config) and POST (JSON body to save config)
+func (s *Server) handleAPIConfig(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.Lock()
+		cfg := s.cfg
+		s.mu.Unlock()
+		if cfg == nil {
+			cfg = &config.Config{}
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(cfg)
+	case http.MethodPost:
+		var cfg config.Config
+		if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		b, err := yamlMarshal(&cfg)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := os.WriteFile(filepath.Join(s.dataDir, "config.yaml"), b, 0o644); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.mu.Lock()
+		s.cfg = &cfg
+		s.mu.Unlock()
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIMapping supports GET (return mapping) and POST (save mapping)
+func (s *Server) handleAPIMapping(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.mu.Lock()
+		mp := s.mapping
+		s.mu.Unlock()
+		if mp == nil {
+			mp = &schema.Mapping{}
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(mp)
+	case http.MethodPost:
+		var mp schema.Mapping
+		if err := json.NewDecoder(r.Body).Decode(&mp); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		by, err := mp.ToYAML()
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := os.WriteFile(filepath.Join(s.dataDir, "mapping.yaml"), by, 0o644); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.mu.Lock()
+		s.mapping = &mp
+		s.mu.Unlock()
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAPIStart and handleAPIStop for programmatic control
+func (s *Server) handleAPIStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// reuse form-based start
+	s.handleStart(w, r)
+}
+
+func (s *Server) handleAPIStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.handleStop(w, r)
+}
+
+// --- CORS helpers ---
+func (s *Server) withCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.cors(w)
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) cors(w http.ResponseWriter) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+}
+
+func (s *Server) corsJSON(w http.ResponseWriter) {
+	s.cors(w)
+	w.Header().Set("Content-Type", "application/json")
+}
