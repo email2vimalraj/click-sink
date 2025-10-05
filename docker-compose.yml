@@ -37,7 +37,6 @@ services:
         soft: 262144
         hard: 262144
 
-
   redpanda-console:
     image: docker.redpanda.com/redpandadata/console:v2.5.1
     depends_on:

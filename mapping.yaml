@@ -9,14 +9,14 @@ columns:
     nullable: false
   - fieldPath: event.value
     column: event_value
-    type: Bool
-    nullable: false
+    type: Nullable(Float64)
+    nullable: true
   - fieldPath: user.email
     column: user_email
     type: String
     nullable: false
   - fieldPath: user.id
     column: user_id
-    type: Bool
+    type: Int64
     nullable: false
 
