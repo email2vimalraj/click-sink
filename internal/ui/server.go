@@ -504,16 +504,19 @@ func (s *Server) corsJSON(w http.ResponseWriter) {
 
 // --- Multi-pipeline types and helpers ---
 type pipelineRuntime struct {
-	id      string
-	name    string
-	dir     string
-	cfg     *config.Config
-	mapping *schema.Mapping
-	running bool
-	cancel  context.CancelFunc
-	lastErr string
-	started time.Time
-	stats   *stats
+	id          string
+	name        string
+	description string
+	dir         string
+	cfg         *config.Config
+	mapping     *schema.Mapping
+	running     bool
+	cancel      context.CancelFunc
+	lastErr     string
+	started     time.Time
+	stats       *stats
+	createdAt   time.Time
+	updatedAt   time.Time
 }
 
 func (s *Server) loadPipelines() error {
@@ -532,6 +535,29 @@ func (s *Server) loadPipelines() error {
 		id := e.Name()
 		dir := filepath.Join(base, id)
 		name := id
+		desc := ""
+		created := time.Now()
+		updated := created
+		if b, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
+			var meta struct {
+				Name        string    `json:"name"`
+				Description string    `json:"description"`
+				CreatedAt   time.Time `json:"createdAt"`
+				UpdatedAt   time.Time `json:"updatedAt"`
+			}
+			if json.Unmarshal(b, &meta) == nil {
+				if meta.Name != "" {
+					name = meta.Name
+				}
+				desc = meta.Description
+				if !meta.CreatedAt.IsZero() {
+					created = meta.CreatedAt
+				}
+				if !meta.UpdatedAt.IsZero() {
+					updated = meta.UpdatedAt
+				}
+			}
+		}
 		if b, err := os.ReadFile(filepath.Join(dir, "name")); err == nil {
 			name = string(b)
 		}
@@ -547,12 +573,12 @@ func (s *Server) loadPipelines() error {
 				mp = m2
 			}
 		}
-		s.pipelines[id] = &pipelineRuntime{id: id, name: name, dir: dir, cfg: cfg, mapping: mp, stats: &stats{}}
+		s.pipelines[id] = &pipelineRuntime{id: id, name: name, description: desc, dir: dir, cfg: cfg, mapping: mp, stats: &stats{}, createdAt: created, updatedAt: updated}
 	}
 	return nil
 }
 
-func (s *Server) createPipeline(name string) (*pipelineRuntime, error) {
+func (s *Server) createPipeline(name string, description string) (*pipelineRuntime, error) {
 	id := sanitizeID(name)
 	base := filepath.Join(s.dataDir, "pipelines")
 	dir := filepath.Join(base, id)
@@ -565,7 +591,8 @@ func (s *Server) createPipeline(name string) (*pipelineRuntime, error) {
 		return nil, err
 	}
 	_ = os.WriteFile(filepath.Join(dir, "name"), []byte(name), 0o644)
-	pr := &pipelineRuntime{id: id, name: name, dir: dir, stats: &stats{}}
+	pr := &pipelineRuntime{id: id, name: name, description: description, dir: dir, stats: &stats{}, createdAt: time.Now(), updatedAt: time.Now()}
+	_ = s.persistMeta(pr)
 	s.mu.Lock()
 	s.pipelines[id] = pr
 	s.mu.Unlock()
@@ -605,16 +632,15 @@ func (s *Server) handleAPIPipelines(w http.ResponseWriter, r *http.Request) {
 			if p.stats != nil {
 				total = p.stats.TotalRows()
 			}
-			list = append(list, map[string]any{
-				"id": id, "name": p.name, "running": p.running, "lastErr": p.lastErr, "started": p.started, "totalRows": total,
-			})
+			list = append(list, map[string]any{"id": id, "name": p.name, "description": p.description, "running": p.running, "lastErr": p.lastErr, "started": p.started, "totalRows": total, "createdAt": p.createdAt, "updatedAt": p.updatedAt})
 		}
 		s.mu.Unlock()
 		s.corsJSON(w)
 		_ = json.NewEncoder(w).Encode(list)
 	case http.MethodPost:
 		var req struct {
-			Name string `json:"name"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), 400)
@@ -623,13 +649,13 @@ func (s *Server) handleAPIPipelines(w http.ResponseWriter, r *http.Request) {
 		if req.Name == "" {
 			req.Name = "pipeline"
 		}
-		pr, err := s.createPipeline(req.Name)
+		pr, err := s.createPipeline(req.Name, req.Description)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		s.corsJSON(w)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name, "description": pr.description, "createdAt": pr.createdAt, "updatedAt": pr.updatedAt})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -669,7 +695,31 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				total = pr.stats.TotalRows()
 			}
 			s.corsJSON(w)
-			_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name, "running": pr.running, "lastErr": pr.lastErr, "started": pr.started, "totalRows": total})
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name, "description": pr.description, "running": pr.running, "lastErr": pr.lastErr, "started": pr.started, "totalRows": total, "createdAt": pr.createdAt, "updatedAt": pr.updatedAt})
+			return
+		case http.MethodPut:
+			var req struct {
+				Name        string `json:"name"`
+				Description string `json:"description"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			s.mu.Lock()
+			if req.Name != "" {
+				pr.name = req.Name
+			}
+			pr.description = req.Description
+			if pr.createdAt.IsZero() {
+				pr.createdAt = time.Now()
+			}
+			pr.updatedAt = time.Now()
+			s.mu.Unlock()
+			_ = os.WriteFile(filepath.Join(pr.dir, "name"), []byte(req.Name), 0o644)
+			_ = s.persistMeta(pr)
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name, "description": pr.description, "createdAt": pr.createdAt, "updatedAt": pr.updatedAt})
 			return
 		case http.MethodDelete:
 			if pr.running && pr.cancel != nil {
@@ -876,4 +926,19 @@ func splitPath(s string) []string {
 		parts = append(parts, cur)
 	}
 	return parts
+}
+
+func (s *Server) persistMeta(pr *pipelineRuntime) error {
+	meta := struct {
+		ID          string    `json:"id"`
+		Name        string    `json:"name"`
+		Description string    `json:"description"`
+		CreatedAt   time.Time `json:"createdAt"`
+		UpdatedAt   time.Time `json:"updatedAt"`
+	}{ID: pr.id, Name: pr.name, Description: pr.description, CreatedAt: pr.createdAt, UpdatedAt: pr.updatedAt}
+	b, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(pr.dir, "meta.json"), b, 0o644)
 }

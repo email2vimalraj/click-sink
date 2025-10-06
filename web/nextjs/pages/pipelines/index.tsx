@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 export default function PipelinesPage() {
   const [list, setList] = useState<any[]>([]);
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [err, setErr] = useState<string | undefined>();
   const refresh = () =>
     api
@@ -17,8 +18,18 @@ export default function PipelinesPage() {
   const create = async () => {
     try {
       if (!name.trim()) return;
-      await api.createPipeline(name.trim());
+      await fetch(
+        `${
+          process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8081"
+        }/api/pipelines`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: name.trim(), description }),
+        }
+      );
       setName("");
+      setDescription("");
       refresh();
     } catch (e: any) {
       alert(String(e));
@@ -46,12 +57,18 @@ export default function PipelinesPage() {
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
+        <input
+          placeholder="description"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
         <button onClick={create}>Create</button>
       </div>
       <table border={1} cellPadding={6} cellSpacing={0}>
         <thead>
           <tr>
             <th>Name</th>
+            <th>Description</th>
             <th>Status</th>
             <th>Total Rows</th>
             <th>Actions</th>
@@ -63,6 +80,7 @@ export default function PipelinesPage() {
               <td>
                 <Link href={`/pipelines/${p.id}/config`}>{p.name}</Link>
               </td>
+              <td>{p.description || ""}</td>
               <td>{p.running ? "running" : "stopped"}</td>
               <td>{p.totalRows || 0}</td>
               <td>

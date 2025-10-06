@@ -7,8 +7,10 @@ export default function PipelineConfig() {
   const router = useRouter();
   const { id } = router.query;
   const [cfg, setCfg] = useState<Config>({ kafka: {}, clickHouse: {} });
+  const [meta, setMeta] = useState<any>(null)
   const [err, setErr] = useState<string | undefined>();
-  useEffect(() => {
+  useEffect(()=>{ if (typeof id==='string'){ api.getPipeline(id).then(setMeta).catch(()=>{}); api.getPipelineConfig(id).then(setCfg).catch(e=>setErr(String(e))) } }, [id])
+  const rename = async () => { if (typeof id!=='string') return; const name = prompt('New name', meta?.name||''); if (!name) return; await fetch(`${process.env.NEXT_PUBLIC_API_BASE||'http://localhost:8081'}/api/pipelines/${id}`, { method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name }) }); const m = await api.getPipeline(id); setMeta(m) }
     if (typeof id === "string")
       api
         .getPipelineConfig(id)
@@ -31,7 +33,8 @@ export default function PipelineConfig() {
         <Link href={`/pipelines/${id}/mapping`}>Mapping</Link> |{" "}
         <Link href={`/pipelines/${id}/run`}>Run</Link>
       </p>
-      <h1>Pipeline {id} - Config</h1>
+  <h1>Pipeline {id} - Config</h1>
+  <p>Name: <strong>{meta?.name||id}</strong> <button onClick={rename}>Rename</button></p>
       {err && <p style={{ color: "red" }}>{err}</p>}
       <h2>Kafka</h2>
       <input
