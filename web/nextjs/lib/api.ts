@@ -40,12 +40,17 @@ export const api = {
   stop: () => json("/api/stop", { method: "POST" }),
   // Multi-pipeline APIs
   listPipelines: () => json<any[]>("/api/pipelines"),
-  createPipeline: (name: string) =>
-    json<{ id: string; name: string }>("/api/pipelines", {
+  createPipeline: (name: string, description?: string) =>
+    json<{ id: string; name: string; description?: string }>("/api/pipelines", {
       method: "POST",
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, description }),
     }),
   getPipeline: (id: string) => json<any>(`/api/pipelines/${id}`),
+  updatePipeline: (id: string, body: { name?: string; description?: string }) =>
+    json<any>(`/api/pipelines/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   deletePipeline: (id: string) =>
     json<any>(`/api/pipelines/${id}`, { method: "DELETE" }),
   getPipelineConfig: (id: string) =>

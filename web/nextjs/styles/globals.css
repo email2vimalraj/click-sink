@@ -1,0 +1,30 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #__next {
+  height: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+button {
+  @apply inline-flex items-center justify-center rounded-md bg-indigo-600 px-3 py-1.5 text-white text-sm font-medium hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed;
+}
+
+input, select, textarea {
+  @apply rounded-md border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white;
+}
+
+table {
+  @apply w-full border border-slate-200 bg-white rounded-md overflow-hidden;
+}
+
+th, td {
+  @apply border border-slate-200 p-2 text-sm;
+}
+
+h1 { @apply text-2xl font-semibold mb-4; }
+h2 { @apply text-xl font-semibold mt-6 mb-2; }
