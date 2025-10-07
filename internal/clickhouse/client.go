@@ -76,6 +76,41 @@ func (c *Client) InsertBatch(ctx context.Context, table string, columns []Column
 	return batch.Send()
 }
 
+// Ping validates the connection by issuing a ping to ClickHouse.
+func (c *Client) Ping(ctx context.Context) error {
+	return c.conn.Ping(ctx)
+}
+
+// TableExists checks if a table exists in the configured or provided database.
+func (c *Client) TableExists(ctx context.Context, db, table string) (bool, error) {
+	if db == "" {
+		db = c.cfg.Database
+	}
+	// Use EXISTS TABLE which returns 1 or 0
+	var exists uint8
+	q := fmt.Sprintf("EXISTS TABLE `%s`.`%s`", escapeIdent(db), escapeIdent(table))
+	if err := c.conn.QueryRow(ctx, q).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists == 1, nil
+}
+
+// CreateTable creates a MergeTree table with the provided columns regardless of cfg.CreateTableIfMissing.
+func (c *Client) CreateTable(ctx context.Context, db, table string, columns []Column) error {
+	if db == "" {
+		db = c.cfg.Database
+	}
+	cols := make([]string, 0, len(columns))
+	for _, col := range columns {
+		cols = append(cols, fmt.Sprintf("`%s` %s", escapeIdent(col.Name), col.Type))
+	}
+	ddl := fmt.Sprintf(
+		"CREATE TABLE IF NOT EXISTS `%s`.`%s` (%s) ENGINE = MergeTree ORDER BY tuple()",
+		escapeIdent(db), escapeIdent(table), strings.Join(cols, ", "),
+	)
+	return c.conn.Exec(ctx, ddl)
+}
+
 func parseDSN(dsn string) (*ch.Options, error) {
 	// Support native clickhouse://username:password@host:9000?database=default
 	// Also support http(s):// with ClickHouse HTTP interface.

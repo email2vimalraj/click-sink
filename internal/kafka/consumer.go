@@ -142,3 +142,42 @@ func Sample(ctx context.Context, cfg *config.KafkaConfig, n int) ([][]byte, erro
 		}
 	}
 }
+
+// ValidateConnectivity attempts to connect to brokers and fetch metadata for the topic.
+func ValidateConnectivity(cfg *config.KafkaConfig) error {
+	sc := sarama.NewConfig()
+	sc.Version = sarama.V3_5_0_0
+	sc.ClientID = "click-sink-validate"
+	// Security
+	switch cfg.SecurityProtocol {
+	case "SASL_SSL", "SASL_PLAINTEXT":
+		sc.Net.SASL.Enable = true
+		sc.Net.SASL.User = cfg.SASLUsername
+		sc.Net.SASL.Password = cfg.SASLPassword
+		switch cfg.SASLMechanism {
+		case "PLAIN":
+			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+		case "SCRAM-SHA-256":
+			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
+		case "SCRAM-SHA-512":
+			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
+		default:
+			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+		}
+		if cfg.SecurityProtocol == "SASL_SSL" {
+			sc.Net.TLS.Enable = true
+		}
+	case "PLAINTEXT", "":
+		// nothing
+	default:
+		return fmt.Errorf("unsupported securityProtocol: %s", cfg.SecurityProtocol)
+	}
+	client, err := sarama.NewClient(cfg.Brokers, sc)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	// Try getting partitions for the topic, which will confirm metadata
+	_, err = client.Partitions(cfg.Topic)
+	return err
+}

@@ -12,7 +12,9 @@ import (
 	"sync"
 	"time"
 
+	ch "github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
+	kaf "github.com/yourname/click-sink/internal/kafka"
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
 	"gopkg.in/yaml.v3"
@@ -80,6 +82,11 @@ func (s *Server) routes() http.Handler {
 	// multi-pipeline endpoints
 	mux.HandleFunc("/api/pipelines", s.handleAPIPipelines)
 	mux.HandleFunc("/api/pipelines/", s.handleAPIPipeline)
+	// validation endpoints
+	mux.HandleFunc("/api/validate/kafka", s.handleValidateKafka)
+	mux.HandleFunc("/api/validate/kafka/sample", s.handleValidateKafkaSample)
+	mux.HandleFunc("/api/validate/clickhouse", s.handleValidateClickHouse)
+	mux.HandleFunc("/api/validate/clickhouse/table", s.handleValidateClickHouseTable)
 	mux.HandleFunc("/save-mapping", s.handleSaveMapping)
 	mux.HandleFunc("/start", s.handleStart)
 	mux.HandleFunc("/stop", s.handleStop)
@@ -562,7 +569,18 @@ func (s *Server) loadPipelines() error {
 			name = string(b)
 		}
 		var cfg *config.Config
-		if _, err := os.Stat(filepath.Join(dir, "config.yaml")); err == nil {
+		// New split config files
+		var kcfg config.KafkaConfig
+		var hcfg config.ClickHouseConfig
+		if b, err := os.ReadFile(filepath.Join(dir, "kafka.yaml")); err == nil {
+			_ = yaml.Unmarshal(b, &kcfg)
+		}
+		if b, err := os.ReadFile(filepath.Join(dir, "clickhouse.yaml")); err == nil {
+			_ = yaml.Unmarshal(b, &hcfg)
+		}
+		if len(kcfg.Brokers) > 0 || kcfg.Topic != "" || hcfg.DSN != "" || hcfg.Table != "" {
+			cfg = &config.Config{Kafka: kcfg, ClickHouse: hcfg}
+		} else if _, err := os.Stat(filepath.Join(dir, "config.yaml")); err == nil { // fallback legacy
 			if c2, err2 := config.Load(filepath.Join(dir, "config.yaml")); err2 == nil {
 				cfg = c2
 			}
@@ -740,6 +758,185 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 	}
 	sub := parts[1]
 	switch sub {
+	case "validate":
+		// /api/pipelines/{id}/validate/{kind}
+		if len(parts) < 3 {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		kind := parts[2]
+		switch kind {
+		case "kafka":
+			if r.Method == http.MethodOptions {
+				s.cors(w)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if pr.cfg == nil {
+				http.Error(w, "save kafka config first", 400)
+				return
+			}
+			if err := kaf.ValidateConnectivity(&pr.cfg.Kafka); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		case "clickhouse":
+			if r.Method == http.MethodOptions {
+				s.cors(w)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if pr.cfg == nil {
+				http.Error(w, "save clickhouse config first", 400)
+				return
+			}
+			client, err := ch.NewClient(&pr.cfg.ClickHouse)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			defer client.Close()
+			if err := client.Ping(r.Context()); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		case "clickhouse-table":
+			if r.Method == http.MethodOptions {
+				s.cors(w)
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			if r.Method != http.MethodPost {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			if pr.cfg == nil {
+				http.Error(w, "save clickhouse config first", 400)
+				return
+			}
+			var req struct {
+				Table   string                        `json:"table"`
+				Columns []struct{ Name, Type string } `json:"columns"`
+				Create  bool                          `json:"create"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			client, err := ch.NewClient(&pr.cfg.ClickHouse)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			defer client.Close()
+			exists, err := client.TableExists(r.Context(), pr.cfg.ClickHouse.Database, req.Table)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if exists {
+				s.corsJSON(w)
+				_ = json.NewEncoder(w).Encode(map[string]any{"exists": true})
+				return
+			}
+			if req.Create {
+				cols := make([]ch.Column, 0, len(req.Columns))
+				for _, c := range req.Columns {
+					cols = append(cols, ch.Column{Name: c.Name, Type: c.Type})
+				}
+				if err := client.CreateTable(r.Context(), pr.cfg.ClickHouse.Database, req.Table, cols); err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				s.corsJSON(w)
+				_ = json.NewEncoder(w).Encode(map[string]any{"created": true})
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"exists": false})
+			return
+		default:
+			http.NotFound(w, r)
+			return
+		}
+	case "kafka-config":
+		switch r.Method {
+		case http.MethodGet:
+			s.corsJSON(w)
+			var kcfg config.KafkaConfig
+			if pr.cfg != nil {
+				kcfg = pr.cfg.Kafka
+			}
+			_ = json.NewEncoder(w).Encode(kcfg)
+		case http.MethodPut:
+			var kcfg config.KafkaConfig
+			if err := json.NewDecoder(r.Body).Decode(&kcfg); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if pr.cfg == nil {
+				pr.cfg = &config.Config{}
+			}
+			pr.cfg.Kafka = kcfg
+			by, _ := yaml.Marshal(kcfg)
+			if err := os.WriteFile(filepath.Join(pr.dir, "kafka.yaml"), by, 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			pr.updatedAt = time.Now()
+			_ = s.persistMeta(pr)
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	case "clickhouse-config":
+		switch r.Method {
+		case http.MethodGet:
+			s.corsJSON(w)
+			var hcfg config.ClickHouseConfig
+			if pr.cfg != nil {
+				hcfg = pr.cfg.ClickHouse
+			}
+			_ = json.NewEncoder(w).Encode(hcfg)
+		case http.MethodPut:
+			var hcfg config.ClickHouseConfig
+			if err := json.NewDecoder(r.Body).Decode(&hcfg); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if pr.cfg == nil {
+				pr.cfg = &config.Config{}
+			}
+			pr.cfg.ClickHouse = hcfg
+			by, _ := yaml.Marshal(hcfg)
+			if err := os.WriteFile(filepath.Join(pr.dir, "clickhouse.yaml"), by, 0o644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			pr.updatedAt = time.Now()
+			_ = s.persistMeta(pr)
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
 	case "config":
 		switch r.Method {
 		case http.MethodGet:
@@ -941,4 +1138,200 @@ func (s *Server) persistMeta(pr *pipelineRuntime) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(pr.dir, "meta.json"), b, 0o644)
+}
+
+// --- Validation Handlers ---
+// Kafka: POST body optional; if absent, try server-level cfg or pipeline cfg
+func (s *Server) handleValidateKafka(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var kcfg config.KafkaConfig
+	// Prefer body
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&kcfg)
+	}
+	// Fallback to legacy cfg
+	if len(kcfg.Brokers) == 0 || kcfg.Topic == "" {
+		s.mu.Lock()
+		if s.cfg != nil {
+			kcfg = s.cfg.Kafka
+		}
+		s.mu.Unlock()
+	}
+	if len(kcfg.Brokers) == 0 || kcfg.Topic == "" {
+		http.Error(w, "kafka brokers/topic required", 400)
+		return
+	}
+	if err := kaf.ValidateConnectivity(&kcfg); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.corsJSON(w)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// Kafka sample + schema infer
+func (s *Server) handleValidateKafkaSample(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Kafka config.KafkaConfig `json:"kafka"`
+		Limit int                `json:"limit"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	if req.Limit <= 0 {
+		req.Limit = s.sampleN
+	}
+	kcfg := req.Kafka
+	if len(kcfg.Brokers) == 0 || kcfg.Topic == "" {
+		s.mu.Lock()
+		if s.cfg != nil {
+			kcfg = s.cfg.Kafka
+		}
+		s.mu.Unlock()
+	}
+	if len(kcfg.Brokers) == 0 || kcfg.Topic == "" {
+		http.Error(w, "kafka brokers/topic required", 400)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	// Build a temp full config for schema call
+	cfg := &config.Config{Kafka: kcfg}
+	y, err := schema.DetectAndRecommend(ctx, cfg, req.Limit)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	// Return both sample-derived mapping YAML and parsed columns
+	mp, err := schema.ParseMapping(y)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	type field struct{ FieldPath, Column, Type string }
+	cols := make([]field, 0, len(mp.Columns))
+	for _, c := range mp.Columns {
+		cols = append(cols, field{c.FieldPath, c.Column, c.Type})
+	}
+	s.corsJSON(w)
+	_ = json.NewEncoder(w).Encode(map[string]any{"mappingYAML": string(y), "fields": cols})
+}
+
+// ClickHouse connectivity validation
+func (s *Server) handleValidateClickHouse(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var hcfg config.ClickHouseConfig
+	_ = json.NewDecoder(r.Body).Decode(&hcfg)
+	if hcfg.DSN == "" {
+		s.mu.Lock()
+		if s.cfg != nil {
+			hcfg = s.cfg.ClickHouse
+		}
+		s.mu.Unlock()
+	}
+	if hcfg.DSN == "" {
+		http.Error(w, "clickhouse dsn required", 400)
+		return
+	}
+	client, err := ch.NewClient(&hcfg)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer client.Close()
+	if err := client.Ping(r.Context()); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	s.corsJSON(w)
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// ClickHouse table check/create
+func (s *Server) handleValidateClickHouseTable(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		ClickHouse config.ClickHouseConfig       `json:"clickhouse"`
+		Table      string                        `json:"table"`
+		Columns    []struct{ Name, Type string } `json:"columns"`
+		Create     bool                          `json:"create"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	hcfg := req.ClickHouse
+	if hcfg.DSN == "" {
+		s.mu.Lock()
+		if s.cfg != nil {
+			hcfg = s.cfg.ClickHouse
+		}
+		s.mu.Unlock()
+	}
+	if hcfg.DSN == "" {
+		http.Error(w, "clickhouse dsn required", 400)
+		return
+	}
+	client, err := ch.NewClient(&hcfg)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	defer client.Close()
+	exists, err := client.TableExists(r.Context(), hcfg.Database, req.Table)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if exists {
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]any{"exists": true})
+		return
+	}
+	if req.Create {
+		cols := make([]ch.Column, 0, len(req.Columns))
+		for _, c := range req.Columns {
+			cols = append(cols, ch.Column{Name: c.Name, Type: c.Type})
+		}
+		if err := client.CreateTable(r.Context(), hcfg.Database, req.Table, cols); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]any{"created": true})
+		return
+	}
+	s.corsJSON(w)
+	_ = json.NewEncoder(w).Encode(map[string]any{"exists": false})
 }
