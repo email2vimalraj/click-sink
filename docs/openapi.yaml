@@ -1,0 +1,498 @@
+openapi: 3.1.0
+info:
+  title: click-sink API
+  version: 0.1.0
+  description: |
+    HTTP API for configuring and running Kafka → ClickHouse pipelines.
+    - Base URL: http://localhost:8081
+    - CORS enabled (no auth; for local development)
+servers:
+  - url: http://localhost:8081
+paths:
+  /api/pipelines:
+    get:
+      summary: List pipelines
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PipelineSummary'
+    post:
+      summary: Create a pipeline
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                description:
+                  type: string
+              required: [name]
+      responses:
+        '200':
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineBasic'
+  /api/pipelines/{id}:
+    parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get pipeline metadata/status
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineSummary'
+        '404': { description: Not Found }
+    put:
+      summary: Update pipeline name/description
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                description: { type: string }
+      responses:
+        '200': { description: OK }
+        '404': { description: Not Found }
+    delete:
+      summary: Delete a pipeline
+      responses:
+        '200': { description: Deleted }
+        '404': { description: Not Found }
+  /api/pipelines/{id}/kafka-config:
+    get:
+      summary: Get Kafka config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/KafkaConfig'
+    put:
+      summary: Save Kafka config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KafkaConfig'
+      responses:
+        '200': { description: OK }
+  /api/pipelines/{id}/clickhouse-config:
+    get:
+      summary: Get ClickHouse config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClickHouseConfig'
+    put:
+      summary: Save ClickHouse config
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClickHouseConfig'
+      responses:
+        '200': { description: OK }
+  /api/pipelines/{id}/validate/kafka:
+    post:
+      summary: Validate Kafka connectivity (pipeline)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: Missing or invalid config }
+        '500': { description: Connectivity error }
+  /api/pipelines/{id}/validate/clickhouse:
+    post:
+      summary: Validate ClickHouse connectivity (pipeline)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: Missing or invalid config }
+        '500': { description: Connectivity error }
+  /api/pipelines/{id}/validate/clickhouse-table:
+    post:
+      summary: Check or create ClickHouse table (pipeline)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                table: { type: string }
+                columns:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Column'
+                create: { type: boolean }
+              required: [table]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    properties:
+                      exists: { type: boolean }
+                  - type: object
+                    properties:
+                      created: { type: boolean }
+        '400': { description: Bad Request }
+        '500': { description: Error }
+  /api/pipelines/{id}/clickhouse/databases:
+    get:
+      summary: List ClickHouse databases
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  databases:
+                    type: array
+                    items: { type: string }
+  /api/pipelines/{id}/clickhouse/tables:
+    get:
+      summary: List ClickHouse tables in database
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: db
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tables:
+                    type: array
+                    items: { type: string }
+  /api/pipelines/{id}/clickhouse/schema:
+    get:
+      summary: Get ClickHouse table schema
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: db
+          schema: { type: string }
+        - in: query
+          name: table
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  columns:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Column'
+  /api/pipelines/{id}/mapping:
+    get:
+      summary: Get mapping
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Mapping'
+    put:
+      summary: Save mapping
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Mapping'
+      responses:
+        '200': { description: OK }
+  /api/pipelines/{id}/sample:
+    get:
+      summary: Sample Kafka and infer fields (pipeline stored config)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Field'
+  /api/pipelines/{id}/status:
+    get:
+      summary: Get pipeline status
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Status'
+  /api/pipelines/{id}/start:
+    post:
+      summary: Start pipeline
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Started }
+        '400': { description: Missing requirements }
+        '500': { description: Error }
+  /api/pipelines/{id}/stop:
+    post:
+      summary: Stop pipeline
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Stopping }
+
+  /api/validate/kafka:
+    post:
+      summary: Validate Kafka connectivity (inline)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/KafkaConfig'
+      responses:
+        '200': { description: OK }
+        '400': { description: Bad Request }
+        '500': { description: Connectivity error }
+  /api/validate/kafka/sample:
+    post:
+      summary: Sample Kafka and infer mapping (inline)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                kafka: { $ref: '#/components/schemas/KafkaConfig' }
+                limit: { type: integer, default: 100 }
+              required: [kafka]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  mappingYAML: { type: string }
+                  fields:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Field'
+  /api/validate/clickhouse:
+    post:
+      summary: Validate ClickHouse connectivity (inline)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClickHouseConfig'
+      responses:
+        '200': { description: OK }
+        '400': { description: Bad Request }
+        '500': { description: Connectivity error }
+  /api/validate/clickhouse/table:
+    post:
+      summary: Check or create ClickHouse table (inline)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                clickhouse: { $ref: '#/components/schemas/ClickHouseConfig' }
+                table: { type: string }
+                columns:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/Column'
+                create: { type: boolean }
+              required: [clickhouse, table]
+      responses:
+        '200': { description: OK }
+        '400': { description: Bad Request }
+        '500': { description: Error }
+
+components:
+  schemas:
+    PipelineBasic:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PipelineSummary:
+      allOf:
+        - $ref: '#/components/schemas/PipelineBasic'
+        - type: object
+          properties:
+            running: { type: boolean }
+            lastErr: { type: string }
+            started: { type: string, format: date-time }
+            totalRows: { type: integer }
+    KafkaConfig:
+      type: object
+      properties:
+        brokers:
+          type: array
+          items: { type: string }
+        topic: { type: string }
+        groupID: { type: string }
+        securityProtocol: { type: string }
+        saslUsername: { type: string }
+        saslPassword: { type: string }
+        saslMechanism: { type: string }
+    ClickHouseConfig:
+      type: object
+      properties:
+        dsn: { type: string }
+        database: { type: string }
+        table: { type: string }
+        batchSize: { type: integer }
+        batchFlushInterval: { type: string }
+        insertRatePerSec: { type: integer }
+    Mapping:
+      type: object
+      properties:
+        columns:
+          type: array
+          items:
+            $ref: '#/components/schemas/Field'
+    Field:
+      type: object
+      properties:
+        fieldPath: { type: string }
+        column: { type: string }
+        type: { type: string }
+    Column:
+      type: object
+      properties:
+        name: { type: string }
+        type: { type: string }
+    Status:
+      type: object
+      properties:
+        running: { type: boolean }
+        started: { type: string, format: date-time }
+        lastErr: { type: string }
+        totalRows: { type: integer }
+        lastBatch: { type: integer }
+        lastBatchAt: { type: string, format: date-time }
