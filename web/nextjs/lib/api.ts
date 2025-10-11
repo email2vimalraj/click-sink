@@ -60,6 +60,46 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(cfg),
     }),
+  // Split config endpoints
+  getKafkaConfig: (id: string) =>
+    json<any>(`/api/pipelines/${id}/kafka-config`),
+  saveKafkaConfig: (id: string, cfg: any) =>
+    json(`/api/pipelines/${id}/kafka-config`, {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
+  getClickHouseConfig: (id: string) =>
+    json<any>(`/api/pipelines/${id}/clickhouse-config`),
+  saveClickHouseConfig: (id: string, cfg: any) =>
+    json(`/api/pipelines/${id}/clickhouse-config`, {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
+  // Validation endpoints
+  validateKafka: (id: string) =>
+    json(`/api/pipelines/${id}/validate/kafka`, { method: "POST" }),
+  validateKafkaSample: (kafkaCfg: any, limit = 100) =>
+    json<{
+      fields: { fieldPath: string; column: string; type: string }[];
+      mappingYAML?: string;
+    }>(`/api/validate/kafka/sample`, {
+      method: "POST",
+      body: JSON.stringify({ kafka: kafkaCfg, limit }),
+    }),
+  validateClickHouse: (id: string) =>
+    json(`/api/pipelines/${id}/validate/clickhouse`, { method: "POST" }),
+  validateClickHouseTable: (
+    id: string,
+    req: {
+      table: string;
+      columns?: { name: string; type: string }[];
+      create?: boolean;
+    }
+  ) =>
+    json(`/api/pipelines/${id}/validate/clickhouse-table`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
   getPipelineMapping: (id: string) =>
     json<Mapping>(`/api/pipelines/${id}/mapping`),
   savePipelineMapping: (id: string, m: Mapping) =>

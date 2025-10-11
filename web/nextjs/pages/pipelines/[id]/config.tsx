@@ -49,6 +49,20 @@ export default function PipelineConfig() {
           <span className="mx-2 text-slate-300">|</span>
           <Link
             className="text-indigo-600 hover:underline"
+            href={`/pipelines/${id}/kafka`}
+          >
+            Kafka
+          </Link>
+          <span className="mx-2 text-slate-300">|</span>
+          <Link
+            className="text-indigo-600 hover:underline"
+            href={`/pipelines/${id}/clickhouse`}
+          >
+            ClickHouse
+          </Link>
+          <span className="mx-2 text-slate-300">|</span>
+          <Link
+            className="text-indigo-600 hover:underline"
             href={`/pipelines/${id}/mapping`}
           >
             Mapping

@@ -1,0 +1,7 @@
+dsn: clickhouse://default:@localhost:9000?database=default
+database: default
+table: events
+batchSize: 200
+batchFlushInterval: 5s
+insertRatePerSecond: 0
+createTableIfMissing: false

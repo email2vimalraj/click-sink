@@ -136,7 +136,8 @@ func recommendType(samples []any) (string, bool) {
 			if v != float64(int64(v)) {
 				isInt = false
 			}
-			// still a number
+			// Any number is not a bool
+			isBool = false
 		case string:
 			isInt = false
 			isFloat = false

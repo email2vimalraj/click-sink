@@ -1,0 +1,8 @@
+brokers:
+    - localhost:9092
+topic: events
+groupId: grp1
+saslUsername: ""
+saslPassword: ""
+saslMechanism: ""
+securityProtocol: ""
