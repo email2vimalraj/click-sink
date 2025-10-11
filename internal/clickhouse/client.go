@@ -50,8 +50,8 @@ func (c *Client) EnsureTable(ctx context.Context, table string, columns []Column
 }
 
 type Column struct {
-	Name string
-	Type string
+	Name string `json:"name"`
+	Type string `json:"type"`
 }
 
 type Row []any

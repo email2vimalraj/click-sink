@@ -1,14 +1,14 @@
 columns:
   - fieldPath: event.ts
     column: event_ts
-    type: String
+    type: DateTime64(3)
     nullable: false
   - fieldPath: event.type
     column: event_type
     type: String
     nullable: false
   - fieldPath: event.value
-    column: event_value
+    column: value
     type: Int64
     nullable: false
   - fieldPath: user.email

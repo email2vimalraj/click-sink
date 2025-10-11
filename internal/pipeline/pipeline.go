@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -197,6 +198,9 @@ func flatten(prefix string, v any) map[string]any {
 }
 
 func coerce(v any, typ string) any {
+	if v == nil {
+		return nil
+	}
 	switch typ {
 	case "Int64", "Nullable(Int64)":
 		switch t := v.(type) {
@@ -244,6 +248,71 @@ func coerce(v any, typ string) any {
 			if n, err := json.Number(t).Int64(); err == nil {
 				return n != 0
 			}
+		}
+	case "String", "Nullable(String)":
+		switch t := v.(type) {
+		case string:
+			return t
+		default:
+			// attempt to marshal and unquote
+			b, err := json.Marshal(v)
+			if err == nil {
+				var s string
+				if err := json.Unmarshal(b, &s); err == nil {
+					return s
+				}
+				return string(b)
+			}
+			return v
+		}
+	}
+	// Date/DateTime/DateTime64 handling (and Nullable variants)
+	isDate := typ == "Date" || typ == "Nullable(Date)"
+	isDT := strings.HasPrefix(typ, "DateTime") || strings.HasPrefix(typ, "Nullable(DateTime")
+	if isDate || isDT {
+		switch t := v.(type) {
+		case time.Time:
+			return t
+		case string:
+			s := strings.TrimSpace(t)
+			s = strings.Trim(s, "\"'")
+			// Try RFC3339 first
+			if tt, err := time.Parse(time.RFC3339Nano, s); err == nil {
+				return tt
+			}
+			// Common ClickHouse formats
+			layouts := []string{
+				"2006-01-02 15:04:05.999999999",
+				"2006-01-02 15:04:05",
+				"2006-01-02",
+			}
+			for _, l := range layouts {
+				if tt, err := time.Parse(l, s); err == nil {
+					return tt
+				}
+			}
+			// numeric epoch seconds/milliseconds
+			if n, err := json.Number(s).Int64(); err == nil {
+				// heuristically treat >1e12 as milliseconds
+				if n > 1_000_000_000_000 {
+					sec := n / 1000
+					ns := (n % 1000) * int64(time.Millisecond)
+					return time.Unix(sec, ns)
+				}
+				return time.Unix(n, 0)
+			}
+		case float64:
+			return time.Unix(int64(t), 0)
+		case int64:
+			return time.Unix(t, 0)
+		case json.Number:
+			if n, err := t.Int64(); err == nil {
+				return time.Unix(n, 0)
+			}
+		}
+		// if nothing matched, return nil for Nullable types
+		if strings.HasPrefix(typ, "Nullable(") {
+			return nil
 		}
 	}
 	// default to string

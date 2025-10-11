@@ -997,8 +997,13 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
+			// Normalize to {name,type}
+			out := make([]map[string]string, 0, len(cols))
+			for _, c := range cols {
+				out = append(out, map[string]string{"name": c.Name, "type": c.Type})
+			}
 			s.corsJSON(w)
-			_ = json.NewEncoder(w).Encode(map[string]any{"columns": cols})
+			_ = json.NewEncoder(w).Encode(map[string]any{"columns": out})
 		default:
 			http.NotFound(w, r)
 		}
