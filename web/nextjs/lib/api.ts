@@ -25,19 +25,7 @@ export type Mapping = {
 };
 
 export const api = {
-  status: () => json<Status>("/api/status"),
-  getConfig: () => json<Config>("/api/config"),
-  saveConfig: (cfg: Config) =>
-    json("/api/config", { method: "POST", body: JSON.stringify(cfg) }),
-  getMapping: () => json<Mapping>("/api/mapping"),
-  saveMapping: (m: Mapping) =>
-    json("/api/mapping", { method: "POST", body: JSON.stringify(m) }),
-  sample: (limit = 100) =>
-    json<{ fieldPath: string; column: string; type: string }[]>(
-      `/api/sample?limit=${limit}`
-    ),
-  start: () => json("/api/start", { method: "POST" }),
-  stop: () => json("/api/stop", { method: "POST" }),
+  // legacy single-pipeline endpoints removed
   // Multi-pipeline APIs
   listPipelines: () => json<any[]>("/api/pipelines"),
   createPipeline: (name: string, description?: string) =>
