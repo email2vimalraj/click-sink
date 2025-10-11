@@ -145,3 +145,66 @@ func parseDSN(dsn string) (*ch.Options, error) {
 func escapeIdent(s string) string {
 	return strings.ReplaceAll(s, "`", "``")
 }
+
+// ListDatabases returns database names
+func (c *Client) ListDatabases(ctx context.Context) ([]string, error) {
+	rows, err := c.conn.Query(ctx, "SELECT name FROM system.databases ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// ListTables returns table names in a database
+func (c *Client) ListTables(ctx context.Context, db string) ([]string, error) {
+	if db == "" {
+		db = c.cfg.Database
+	}
+	rows, err := c.conn.Query(ctx, "SELECT name FROM system.tables WHERE database = ? ORDER BY name", db)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		out = append(out, name)
+	}
+	return out, rows.Err()
+}
+
+// GetTableSchema returns columns (name,type) for a table in a database
+func (c *Client) GetTableSchema(ctx context.Context, db, table string) ([]Column, error) {
+	if db == "" {
+		db = c.cfg.Database
+	}
+	if table == "" {
+		return nil, errors.New("table name required")
+	}
+	rows, err := c.conn.Query(ctx, "SELECT name, type FROM system.columns WHERE database = ? AND table = ? ORDER BY position", db, table)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Column
+	for rows.Next() {
+		var name, typ string
+		if err := rows.Scan(&name, &typ); err != nil {
+			return nil, err
+		}
+		out = append(out, Column{Name: name, Type: typ})
+	}
+	return out, rows.Err()
+}

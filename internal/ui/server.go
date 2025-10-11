@@ -942,6 +942,67 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
+	case "clickhouse":
+		// nested: /api/pipelines/{id}/clickhouse/{databases|tables|schema}
+		if len(parts) < 3 {
+			http.NotFound(w, r)
+			return
+		}
+		if pr.cfg == nil {
+			http.Error(w, "save clickhouse config first", 400)
+			return
+		}
+		action := parts[2]
+		client, err := ch.NewClient(&pr.cfg.ClickHouse)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		defer client.Close()
+		switch action {
+		case "databases":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			dbs, err := client.ListDatabases(r.Context())
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"databases": dbs})
+		case "tables":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			db := r.URL.Query().Get("db")
+			tbls, err := client.ListTables(r.Context(), db)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"tables": tbls})
+		case "schema":
+			if r.Method != http.MethodGet {
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			db := r.URL.Query().Get("db")
+			table := r.URL.Query().Get("table")
+			cols, err := client.GetTableSchema(r.Context(), db, table)
+			if err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"columns": cols})
+		default:
+			http.NotFound(w, r)
+		}
+		return
 	case "config":
 		switch r.Method {
 		case http.MethodGet:

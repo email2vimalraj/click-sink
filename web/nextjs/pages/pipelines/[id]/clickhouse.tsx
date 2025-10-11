@@ -49,7 +49,7 @@ export default function PipelineClickHouse() {
     setStatus("Validating...");
     setErr(undefined);
     try {
-      await api.validateClickHouse(id);
+      await api.validateClickHouse(id as string);
       setStatus("ClickHouse connectivity OK");
     } catch (e: any) {
       setErr(String(e));
@@ -73,36 +73,7 @@ export default function PipelineClickHouse() {
     }
   };
 
-  const createTable = async () => {
-    if (typeof id !== "string") return;
-    setStatus("Creating table...");
-    setErr(undefined);
-    try {
-      const tableName = cfg.table || cfg.Table;
-      if (!tableName) {
-        throw new Error("table name required");
-      }
-      if (!mappingCols || mappingCols.length === 0) {
-        throw new Error(
-          "No mapping columns found. Go to Mapping page to define columns."
-        );
-      }
-      const columns = mappingCols.map((c) => ({
-        name: c.column,
-        type: c.type,
-      }));
-      const r: any = await api.validateClickHouseTable(id, {
-        table: tableName,
-        columns,
-        create: true,
-      });
-      setExists(true);
-      setStatus(r.created ? "Table created" : "Table exists");
-    } catch (e: any) {
-      setErr(String(e));
-      setStatus("");
-    }
-  };
+  // Removed: table creation is handled during Mapping stage.
 
   return (
     <main className="min-h-screen p-6">
@@ -171,9 +142,9 @@ export default function PipelineClickHouse() {
             Validate
           </button>
           <button onClick={checkTable}>Check Table</button>
-          <button onClick={createTable} disabled={exists === true}>
+          {/* <button onClick={createTable} disabled={exists === true}>
             Create Table
-          </button>
+          </button> */}
         </div>
         <div className="mt-2 text-sm text-slate-600">
           Mapping columns loaded: <strong>{mappingCols.length}</strong>

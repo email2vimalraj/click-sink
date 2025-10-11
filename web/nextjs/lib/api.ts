@@ -100,6 +100,21 @@ export const api = {
       method: "POST",
       body: JSON.stringify(req),
     }),
+  // ClickHouse browse APIs for mapping stage
+  listDatabases: (id: string) =>
+    json<{ databases: string[] }>(`/api/pipelines/${id}/clickhouse/databases`),
+  listTables: (id: string, db?: string) =>
+    json<{ tables: string[] }>(
+      `/api/pipelines/${id}/clickhouse/tables${
+        db ? `?db=${encodeURIComponent(db)}` : ""
+      }`
+    ),
+  getTableSchema: (id: string, db: string, table: string) =>
+    json<{ columns: { name: string; type: string }[] }>(
+      `/api/pipelines/${id}/clickhouse/schema?db=${encodeURIComponent(
+        db
+      )}&table=${encodeURIComponent(table)}`
+    ),
   getPipelineMapping: (id: string) =>
     json<Mapping>(`/api/pipelines/${id}/mapping`),
   savePipelineMapping: (id: string, m: Mapping) =>

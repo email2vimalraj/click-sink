@@ -207,6 +207,15 @@ func coerce(v any, typ string) any {
 		case json.Number:
 			i, _ := t.Int64()
 			return i
+		case string:
+			// try parse integer
+			if i, err := json.Number(t).Int64(); err == nil {
+				return i
+			}
+			// fallback: try float then cast
+			if f, err := json.Number(t).Float64(); err == nil {
+				return int64(f)
+			}
 		}
 	case "Float64", "Nullable(Float64)":
 		switch t := v.(type) {
@@ -215,11 +224,26 @@ func coerce(v any, typ string) any {
 		case json.Number:
 			f, _ := t.Float64()
 			return f
+		case string:
+			if f, err := json.Number(t).Float64(); err == nil {
+				return f
+			}
 		}
 	case "Bool", "Nullable(Bool)":
 		switch t := v.(type) {
 		case bool:
 			return t
+		case string:
+			if t == "true" || t == "TRUE" || t == "1" {
+				return true
+			}
+			if t == "false" || t == "FALSE" || t == "0" {
+				return false
+			}
+			// attempt to parse numeric truthiness
+			if n, err := json.Number(t).Int64(); err == nil {
+				return n != 0
+			}
 		}
 	}
 	// default to string
