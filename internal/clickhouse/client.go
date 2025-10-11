@@ -25,6 +25,10 @@ func NewClient(cfg *config.ClickHouseConfig) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+	// If cfg.Database is not set but DSN had a database, propagate it so helper methods have it.
+	if cfg.Database == "" && opts != nil && opts.Auth.Database != "" {
+		cfg.Database = opts.Auth.Database
+	}
 	return &Client{conn: conn, cfg: cfg}, nil
 }
 
@@ -86,6 +90,9 @@ func (c *Client) TableExists(ctx context.Context, db, table string) (bool, error
 	if db == "" {
 		db = c.cfg.Database
 	}
+	if table == "" {
+		return false, errors.New("table name required")
+	}
 	// Use EXISTS TABLE which returns 1 or 0
 	var exists uint8
 	q := fmt.Sprintf("EXISTS TABLE `%s`.`%s`", escapeIdent(db), escapeIdent(table))
@@ -99,6 +106,12 @@ func (c *Client) TableExists(ctx context.Context, db, table string) (bool, error
 func (c *Client) CreateTable(ctx context.Context, db, table string, columns []Column) error {
 	if db == "" {
 		db = c.cfg.Database
+	}
+	if table == "" {
+		return errors.New("table name required")
+	}
+	if len(columns) == 0 {
+		return errors.New("at least one column is required to create table")
 	}
 	cols := make([]string, 0, len(columns))
 	for _, col := range columns {

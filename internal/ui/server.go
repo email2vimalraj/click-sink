@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -835,6 +836,10 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, err.Error(), 400)
+				return
+			}
+			if strings.TrimSpace(req.Table) == "" {
+				http.Error(w, "table name required", 400)
 				return
 			}
 			client, err := ch.NewClient(&pr.cfg.ClickHouse)

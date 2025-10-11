@@ -17,6 +17,9 @@ export default function PipelineClickHouse() {
   const [status, setStatus] = useState<string>("");
   const [err, setErr] = useState<string | undefined>();
   const [exists, setExists] = useState<boolean | null>(null);
+  const [mappingCols, setMappingCols] = useState<
+    { fieldPath: string; column: string; type: string }[]
+  >([]);
 
   useEffect(() => {
     if (typeof id === "string") {
@@ -24,6 +27,10 @@ export default function PipelineClickHouse() {
         .getClickHouseConfig(id)
         .then(setCfg)
         .catch(() => {});
+      api
+        .getPipelineMapping(id)
+        .then((m) => setMappingCols(m?.columns || []))
+        .catch(() => setMappingCols([]));
     }
   }, [id]);
 
@@ -56,7 +63,7 @@ export default function PipelineClickHouse() {
     setErr(undefined);
     try {
       const r: any = await api.validateClickHouseTable(id, {
-        table: cfg.table,
+        table: cfg.table || cfg.Table,
       });
       setExists(Boolean(r.exists));
       setStatus(r.exists ? "Table exists" : "Table not found");
@@ -71,8 +78,22 @@ export default function PipelineClickHouse() {
     setStatus("Creating table...");
     setErr(undefined);
     try {
+      const tableName = cfg.table || cfg.Table;
+      if (!tableName) {
+        throw new Error("table name required");
+      }
+      if (!mappingCols || mappingCols.length === 0) {
+        throw new Error(
+          "No mapping columns found. Go to Mapping page to define columns."
+        );
+      }
+      const columns = mappingCols.map((c) => ({
+        name: c.column,
+        type: c.type,
+      }));
       const r: any = await api.validateClickHouseTable(id, {
-        table: cfg.table,
+        table: tableName,
+        columns,
         create: true,
       });
       setExists(true);
@@ -153,6 +174,20 @@ export default function PipelineClickHouse() {
           <button onClick={createTable} disabled={exists === true}>
             Create Table
           </button>
+        </div>
+        <div className="mt-2 text-sm text-slate-600">
+          Mapping columns loaded: <strong>{mappingCols.length}</strong>
+          {mappingCols.length === 0 && (
+            <>
+              <span className="mx-2 text-slate-300">|</span>
+              <Link
+                className="text-indigo-600 hover:underline"
+                href={`/pipelines/${id}/mapping`}
+              >
+                Define mapping
+              </Link>
+            </>
+          )}
         </div>
       </div>
     </main>
