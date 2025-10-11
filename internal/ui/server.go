@@ -17,6 +17,7 @@ import (
 	kaf "github.com/yourname/click-sink/internal/kafka"
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
+	"github.com/yourname/click-sink/internal/store"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +36,7 @@ type Server struct {
 
 	// multi-pipeline support
 	pipelines map[string]*pipelineRuntime
+	store     store.PipelineStore
 }
 
 func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
@@ -42,6 +44,8 @@ func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		return nil, err
 	}
+	// default to filesystem-backed store for now
+	s.store = store.NewFSStore(dataDir)
 	// Try load existing config/mapping
 	if b, err := os.ReadFile(filepath.Join(dataDir, "config.yaml")); err == nil {
 		if cfg, err2 := config.Load(filepath.Join(dataDir, "config.yaml")); err2 == nil {
@@ -56,7 +60,7 @@ func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
 			s.mapping = m
 		}
 	}
-	// Load existing pipelines from dataDir/pipelines/*
+	// Load existing pipelines via store
 	_ = s.loadPipelines()
 	return s, nil
 }
@@ -165,7 +169,6 @@ type pipelineRuntime struct {
 	id          string
 	name        string
 	description string
-	dir         string
 	cfg         *config.Config
 	mapping     *schema.Mapping
 	running     bool
@@ -178,92 +181,44 @@ type pipelineRuntime struct {
 }
 
 func (s *Server) loadPipelines() error {
-	base := filepath.Join(s.dataDir, "pipelines")
-	if err := os.MkdirAll(base, 0o755); err != nil {
-		return err
-	}
-	entries, err := os.ReadDir(base)
+	ctx := context.Background()
+	pls, err := s.store.ListPipelines(ctx)
 	if err != nil {
 		return err
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		id := e.Name()
-		dir := filepath.Join(base, id)
-		name := id
-		desc := ""
-		created := time.Now()
-		updated := created
-		if b, err := os.ReadFile(filepath.Join(dir, "meta.json")); err == nil {
-			var meta struct {
-				Name        string    `json:"name"`
-				Description string    `json:"description"`
-				CreatedAt   time.Time `json:"createdAt"`
-				UpdatedAt   time.Time `json:"updatedAt"`
-			}
-			if json.Unmarshal(b, &meta) == nil {
-				if meta.Name != "" {
-					name = meta.Name
-				}
-				desc = meta.Description
-				if !meta.CreatedAt.IsZero() {
-					created = meta.CreatedAt
-				}
-				if !meta.UpdatedAt.IsZero() {
-					updated = meta.UpdatedAt
-				}
-			}
-		}
-		if b, err := os.ReadFile(filepath.Join(dir, "name")); err == nil {
-			name = string(b)
-		}
+	for _, p := range pls {
 		var cfg *config.Config
-		// New split config files
-		var kcfg config.KafkaConfig
-		var hcfg config.ClickHouseConfig
-		if b, err := os.ReadFile(filepath.Join(dir, "kafka.yaml")); err == nil {
-			_ = yaml.Unmarshal(b, &kcfg)
-		}
-		if b, err := os.ReadFile(filepath.Join(dir, "clickhouse.yaml")); err == nil {
-			_ = yaml.Unmarshal(b, &hcfg)
-		}
-		if len(kcfg.Brokers) > 0 || kcfg.Topic != "" || hcfg.DSN != "" || hcfg.Table != "" {
-			cfg = &config.Config{Kafka: kcfg, ClickHouse: hcfg}
-		} else if _, err := os.Stat(filepath.Join(dir, "config.yaml")); err == nil { // fallback legacy
-			if c2, err2 := config.Load(filepath.Join(dir, "config.yaml")); err2 == nil {
-				cfg = c2
+		kcfg, _ := s.store.GetKafkaConfig(ctx, p.ID)
+		hcfg, _ := s.store.GetClickHouseConfig(ctx, p.ID)
+		if (kcfg != nil && (len(kcfg.Brokers) > 0 || kcfg.Topic != "")) || (hcfg != nil && (hcfg.DSN != "" || hcfg.Table != "")) {
+			cfg = &config.Config{}
+			if kcfg != nil {
+				cfg.Kafka = *kcfg
+			}
+			if hcfg != nil {
+				cfg.ClickHouse = *hcfg
 			}
 		}
 		var mp *schema.Mapping
-		if b, err := os.ReadFile(filepath.Join(dir, "mapping.yaml")); err == nil {
-			if m2, err2 := schema.ParseMapping(b); err2 == nil {
+		if y, err := s.store.GetMappingYAML(ctx, p.ID); err == nil && len(y) > 0 {
+			if m2, err2 := schema.ParseMapping(y); err2 == nil {
 				mp = m2
 			}
 		}
-		s.pipelines[id] = &pipelineRuntime{id: id, name: name, description: desc, dir: dir, cfg: cfg, mapping: mp, stats: &stats{}, createdAt: created, updatedAt: updated}
+		s.pipelines[p.ID] = &pipelineRuntime{id: p.ID, name: p.Name, description: p.Description, cfg: cfg, mapping: mp, stats: &stats{}, createdAt: p.CreatedAt, updatedAt: p.UpdatedAt}
 	}
 	return nil
 }
 
 func (s *Server) createPipeline(name string, description string) (*pipelineRuntime, error) {
-	id := sanitizeID(name)
-	base := filepath.Join(s.dataDir, "pipelines")
-	dir := filepath.Join(base, id)
-	if _, err := os.Stat(dir); err == nil {
-		// ensure unique
-		id = id + "-" + strconv.FormatInt(time.Now().Unix(), 10)
-		dir = filepath.Join(base, id)
-	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	ctx := context.Background()
+	p, err := s.store.CreatePipeline(ctx, name, description)
+	if err != nil {
 		return nil, err
 	}
-	_ = os.WriteFile(filepath.Join(dir, "name"), []byte(name), 0o644)
-	pr := &pipelineRuntime{id: id, name: name, description: description, dir: dir, stats: &stats{}, createdAt: time.Now(), updatedAt: time.Now()}
-	_ = s.persistMeta(pr)
+	pr := &pipelineRuntime{id: p.ID, name: p.Name, description: p.Description, stats: &stats{}, createdAt: p.CreatedAt, updatedAt: p.UpdatedAt}
 	s.mu.Lock()
-	s.pipelines[id] = pr
+	s.pipelines[p.ID] = pr
 	s.mu.Unlock()
 	return pr, nil
 }
@@ -385,8 +340,7 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			}
 			pr.updatedAt = time.Now()
 			s.mu.Unlock()
-			_ = os.WriteFile(filepath.Join(pr.dir, "name"), []byte(req.Name), 0o644)
-			_ = s.persistMeta(pr)
+			_ = s.store.UpdatePipeline(r.Context(), pr.id, pr.name, pr.description)
 			s.corsJSON(w)
 			_ = json.NewEncoder(w).Encode(map[string]any{"id": pr.id, "name": pr.name, "description": pr.description, "createdAt": pr.createdAt, "updatedAt": pr.updatedAt})
 			return
@@ -394,8 +348,8 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			if pr.running && pr.cancel != nil {
 				pr.cancel()
 			}
-			// remove dir
-			_ = os.RemoveAll(pr.dir)
+			// delete via store
+			_ = s.store.DeletePipeline(r.Context(), pr.id)
 			s.mu.Lock()
 			delete(s.pipelines, id)
 			s.mu.Unlock()
@@ -535,6 +489,8 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			var kcfg config.KafkaConfig
 			if pr.cfg != nil {
 				kcfg = pr.cfg.Kafka
+			} else if kc, err := s.store.GetKafkaConfig(r.Context(), pr.id); err == nil && kc != nil {
+				kcfg = *kc
 			}
 			_ = json.NewEncoder(w).Encode(kcfg)
 		case http.MethodPut:
@@ -547,13 +503,12 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				pr.cfg = &config.Config{}
 			}
 			pr.cfg.Kafka = kcfg
-			by, _ := yaml.Marshal(kcfg)
-			if err := os.WriteFile(filepath.Join(pr.dir, "kafka.yaml"), by, 0o644); err != nil {
+			if err := s.store.PutKafkaConfig(r.Context(), pr.id, &kcfg); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
 			pr.updatedAt = time.Now()
-			_ = s.persistMeta(pr)
+			_ = s.store.UpdatePipeline(r.Context(), pr.id, pr.name, pr.description)
 			s.corsJSON(w)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		default:
@@ -567,6 +522,8 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			var hcfg config.ClickHouseConfig
 			if pr.cfg != nil {
 				hcfg = pr.cfg.ClickHouse
+			} else if hc, err := s.store.GetClickHouseConfig(r.Context(), pr.id); err == nil && hc != nil {
+				hcfg = *hc
 			}
 			_ = json.NewEncoder(w).Encode(hcfg)
 		case http.MethodPut:
@@ -579,13 +536,12 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				pr.cfg = &config.Config{}
 			}
 			pr.cfg.ClickHouse = hcfg
-			by, _ := yaml.Marshal(hcfg)
-			if err := os.WriteFile(filepath.Join(pr.dir, "clickhouse.yaml"), by, 0o644); err != nil {
+			if err := s.store.PutClickHouseConfig(r.Context(), pr.id, &hcfg); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
 			pr.updatedAt = time.Now()
-			_ = s.persistMeta(pr)
+			_ = s.store.UpdatePipeline(r.Context(), pr.id, pr.name, pr.description)
 			s.corsJSON(w)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 		default:
@@ -663,7 +619,17 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 		case http.MethodGet:
 			s.corsJSON(w)
 			if pr.cfg == nil {
-				_ = json.NewEncoder(w).Encode(&config.Config{})
+				// try load from store
+				kc, _ := s.store.GetKafkaConfig(r.Context(), pr.id)
+				hc, _ := s.store.GetClickHouseConfig(r.Context(), pr.id)
+				cfg := &config.Config{}
+				if kc != nil {
+					cfg.Kafka = *kc
+				}
+				if hc != nil {
+					cfg.ClickHouse = *hc
+				}
+				_ = json.NewEncoder(w).Encode(cfg)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(pr.cfg)
@@ -673,15 +639,9 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			by, err := yamlMarshal(&cfg)
-			if err != nil {
-				http.Error(w, err.Error(), 400)
-				return
-			}
-			if err := os.WriteFile(filepath.Join(pr.dir, "config.yaml"), by, 0o644); err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
+			// persist into split configs via store
+			_ = s.store.PutKafkaConfig(r.Context(), pr.id, &cfg.Kafka)
+			_ = s.store.PutClickHouseConfig(r.Context(), pr.id, &cfg.ClickHouse)
 			s.mu.Lock()
 			pr.cfg = &cfg
 			s.mu.Unlock()
@@ -695,6 +655,16 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 		case http.MethodGet:
 			s.corsJSON(w)
 			if pr.mapping == nil {
+				// Try load from store
+				if y, err := s.store.GetMappingYAML(r.Context(), pr.id); err == nil && len(y) > 0 {
+					if m2, err2 := schema.ParseMapping(y); err2 == nil {
+						s.mu.Lock()
+						pr.mapping = m2
+						s.mu.Unlock()
+						_ = json.NewEncoder(w).Encode(m2)
+						return
+					}
+				}
 				// Return an empty mapping with columns: [] instead of null
 				empty := &schema.Mapping{Columns: []schema.MapColumn{}}
 				_ = json.NewEncoder(w).Encode(empty)
@@ -712,7 +682,7 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
-			if err := os.WriteFile(filepath.Join(pr.dir, "mapping.yaml"), by, 0o644); err != nil {
+			if err := s.store.PutMappingYAML(r.Context(), pr.id, by); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}
@@ -852,20 +822,7 @@ func splitPath(s string) []string {
 	return parts
 }
 
-func (s *Server) persistMeta(pr *pipelineRuntime) error {
-	meta := struct {
-		ID          string    `json:"id"`
-		Name        string    `json:"name"`
-		Description string    `json:"description"`
-		CreatedAt   time.Time `json:"createdAt"`
-		UpdatedAt   time.Time `json:"updatedAt"`
-	}{ID: pr.id, Name: pr.name, Description: pr.description, CreatedAt: pr.createdAt, UpdatedAt: pr.updatedAt}
-	b, err := json.MarshalIndent(meta, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(pr.dir, "meta.json"), b, 0o644)
-}
+// meta persistence is handled by the store
 
 // --- Validation Handlers ---
 // Kafka: POST body optional; if absent, try server-level cfg or pipeline cfg
