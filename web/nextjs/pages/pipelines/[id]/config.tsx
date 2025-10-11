@@ -1,14 +1,42 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, Config } from "../../../lib/api";
+import { api } from "../../../lib/api";
+
+type KafkaCfg = any;
+type ClickHouseCfg = any;
+
+function normalizeKafka(c: KafkaCfg) {
+  return {
+    brokers: c?.brokers || c?.Brokers || [],
+    topic: c?.topic || c?.Topic || "",
+    groupID: c?.groupID || c?.groupId || c?.GroupID || "",
+    securityProtocol: c?.securityProtocol || c?.SecurityProtocol || "",
+    saslUsername: c?.saslUsername || c?.SASLUsername || "",
+    saslPassword: c?.saslPassword || c?.SASLPassword || "",
+    saslMechanism: c?.saslMechanism || c?.SASLMechanism || "",
+  };
+}
+
+function normalizeCH(c: ClickHouseCfg) {
+  return {
+    dsn: c?.dsn || c?.DSN || "",
+    database: c?.database || c?.Database || "",
+    table: c?.table || c?.Table || "",
+    batchSize: c?.batchSize || c?.BatchSize || 0,
+    batchFlushInterval: c?.batchFlushInterval || c?.BatchFlushInterval || "",
+    insertRatePerSec: c?.insertRatePerSec || c?.InsertRatePerSec || 0,
+  };
+}
 
 export default function PipelineConfig() {
   const router = useRouter();
   const { id } = router.query;
-  const [cfg, setCfg] = useState<Config>({ kafka: {}, clickHouse: {} });
   const [meta, setMeta] = useState<any>(null);
+  const [kafkaCfg, setKafkaCfg] = useState<KafkaCfg | null>(null);
+  const [chCfg, setChCfg] = useState<ClickHouseCfg | null>(null);
   const [err, setErr] = useState<string | undefined>();
+
   useEffect(() => {
     if (typeof id === "string") {
       api
@@ -16,11 +44,20 @@ export default function PipelineConfig() {
         .then(setMeta)
         .catch(() => {});
       api
-        .getPipelineConfig(id)
-        .then(setCfg)
-        .catch((e) => setErr(String(e)));
+        .getKafkaConfig(id)
+        .then(setKafkaCfg)
+        .catch(() => setKafkaCfg(null));
+      api
+        .getClickHouseConfig(id)
+        .then(setChCfg)
+        .catch(() => setChCfg(null));
     }
   }, [id]);
+
+  const k = normalizeKafka(kafkaCfg || {});
+  const h = normalizeCH(chCfg || {});
+  const hasKafka = (k.brokers && k.brokers.length > 0) || k.topic;
+  const hasCH = !!(h.dsn || h.database || h.table);
 
   const rename = async () => {
     if (typeof id !== "string") return;
@@ -30,15 +67,7 @@ export default function PipelineConfig() {
     const m = await api.getPipeline(id);
     setMeta(m);
   };
-  const save = async () => {
-    if (typeof id !== "string") return;
-    try {
-      await api.savePipelineConfig(id, cfg);
-      alert("Saved");
-    } catch (e: any) {
-      alert(String(e));
-    }
-  };
+
   return (
     <main className="min-h-screen p-6">
       <div className="mx-auto max-w-4xl">
@@ -88,123 +117,86 @@ export default function PipelineConfig() {
           </button>
         </div>
         {err && <p className="mb-4 text-sm text-red-600">{err}</p>}
+
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           <div className="space-y-2">
-            <h2>Kafka</h2>
-            <input
-              placeholder="brokers a,b"
-              value={(cfg.kafka?.brokers || []).join(",")}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  kafka: {
-                    ...cfg.kafka,
-                    brokers: e.target.value
-                      .split(",")
-                      .map((s: string) => s.trim())
-                      .filter(Boolean),
-                  },
-                })
-              }
-            />
-            <input
-              placeholder="topic"
-              value={cfg.kafka?.topic || ""}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  kafka: { ...cfg.kafka, topic: e.target.value },
-                })
-              }
-            />
-            <input
-              placeholder="groupID"
-              value={cfg.kafka?.groupID || ""}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  kafka: { ...cfg.kafka, groupID: e.target.value },
-                })
-              }
-            />
+            <div className="flex items-center justify-between">
+              <h2>Kafka</h2>
+              <Link
+                className="text-indigo-600 hover:underline"
+                href={`/pipelines/${id}/kafka`}
+              >
+                Edit
+              </Link>
+            </div>
+            {hasKafka ? (
+              <div className="rounded-md border border-slate-200 bg-white p-3 text-sm">
+                <div>
+                  <strong>Brokers:</strong>{" "}
+                  {(k.brokers || []).join(", ") || "-"}
+                </div>
+                <div>
+                  <strong>Topic:</strong> {k.topic || "-"}
+                </div>
+                <div>
+                  <strong>GroupID:</strong> {k.groupID || "-"}
+                </div>
+                {k.securityProtocol && (
+                  <div>
+                    <strong>Security:</strong> {k.securityProtocol}
+                  </div>
+                )}
+                {(k.saslUsername || k.saslMechanism) && (
+                  <div>
+                    <strong>SASL:</strong> {k.saslUsername || "(user unset)"}{" "}
+                    {k.saslMechanism ? `(${k.saslMechanism})` : ""}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600">
+                No Kafka configuration yet. Go to the Kafka page to add it.
+              </p>
+            )}
           </div>
           <div className="space-y-2">
-            <h2>ClickHouse</h2>
-            <input
-              placeholder="dsn"
-              value={cfg.clickHouse?.dsn || ""}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  clickHouse: { ...cfg.clickHouse, dsn: e.target.value },
-                })
-              }
-            />
-            <input
-              placeholder="database"
-              value={cfg.clickHouse?.database || ""}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  clickHouse: { ...cfg.clickHouse, database: e.target.value },
-                })
-              }
-            />
-            <input
-              placeholder="table"
-              value={cfg.clickHouse?.table || ""}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  clickHouse: { ...cfg.clickHouse, table: e.target.value },
-                })
-              }
-            />
-            <input
-              placeholder="batch size"
-              type="number"
-              value={cfg.clickHouse?.batchSize || 0}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  clickHouse: {
-                    ...cfg.clickHouse,
-                    batchSize: Number(e.target.value),
-                  },
-                })
-              }
-            />
-            <input
-              placeholder="flush interval (e.g. 1s, 500ms)"
-              value={cfg.clickHouse?.batchFlushInterval || ""}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  clickHouse: {
-                    ...cfg.clickHouse,
-                    batchFlushInterval: e.target.value,
-                  },
-                })
-              }
-            />
-            <input
-              placeholder="rate/sec"
-              type="number"
-              value={cfg.clickHouse?.insertRatePerSec || 0}
-              onChange={(e) =>
-                setCfg({
-                  ...cfg,
-                  clickHouse: {
-                    ...cfg.clickHouse,
-                    insertRatePerSec: Number(e.target.value),
-                  },
-                })
-              }
-            />
+            <div className="flex items-center justify-between">
+              <h2>ClickHouse</h2>
+              <Link
+                className="text-indigo-600 hover:underline"
+                href={`/pipelines/${id}/clickhouse`}
+              >
+                Edit
+              </Link>
+            </div>
+            {hasCH ? (
+              <div className="rounded-md border border-slate-200 bg-white p-3 text-sm">
+                <div>
+                  <strong>DSN:</strong> {h.dsn || "-"}
+                </div>
+                <div>
+                  <strong>Database:</strong> {h.database || "-"}
+                </div>
+                <div>
+                  <strong>Table:</strong> {h.table || "-"}
+                </div>
+                <div>
+                  <strong>Batch Size:</strong> {h.batchSize || 0}
+                </div>
+                <div>
+                  <strong>Flush Interval:</strong> {h.batchFlushInterval || "-"}
+                </div>
+                <div>
+                  <strong>Insert Rate/sec:</strong> {h.insertRatePerSec || 0}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-600">
+                No ClickHouse configuration yet. Go to the ClickHouse page to
+                add it.
+              </p>
+            )}
           </div>
-        </div>
-        <div className="mt-4">
-          <button onClick={save}>Save</button>
         </div>
       </div>
     </main>
