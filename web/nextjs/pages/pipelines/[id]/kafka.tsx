@@ -120,6 +120,23 @@ export default function PipelineKafka() {
             Validate
           </button>
           <button onClick={infer}>Sample & Infer</button>
+          {sample.length > 0 && typeof id === "string" && (
+            <button
+              className="bg-indigo-600 text-white hover:bg-indigo-700"
+              onClick={async () => {
+                try {
+                  await api.savePipelineMapping(id as string, {
+                    columns: sample,
+                  });
+                  setStatus("Inferred mapping saved");
+                } catch (e: any) {
+                  setErr(String(e));
+                }
+              }}
+            >
+              Use Inferred Mapping
+            </button>
+          )}
         </div>
         {sample.length > 0 && (
           <div className="mt-6">

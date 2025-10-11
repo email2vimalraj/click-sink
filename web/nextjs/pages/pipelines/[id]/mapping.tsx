@@ -30,6 +30,14 @@ export default function PipelineMapping() {
         { fieldPath: f.fieldPath, column: f.column, type: f.type },
       ],
     }));
+  const addAll = () =>
+    setMapping({
+      columns: fields.map((f) => ({
+        fieldPath: f.fieldPath,
+        column: f.column,
+        type: f.type,
+      })),
+    });
   const save = async () => {
     if (typeof id !== "string") return;
     try {
@@ -63,6 +71,15 @@ export default function PipelineMapping() {
         </p>
         <h1>Pipeline {id} - Mapping</h1>
         {err && <p className="mb-4 text-sm text-red-600">{err}</p>}
+        <div className="mb-2 flex items-center justify-between">
+          <h2 className="m-0">Sample Fields</h2>
+          <button
+            className="bg-slate-200 text-slate-900 hover:bg-slate-300"
+            onClick={addAll}
+          >
+            Add All
+          </button>
+        </div>
         <div className="overflow-hidden rounded-lg border border-slate-200 bg-white">
           <table className="w-full">
             <thead className="bg-slate-50">
@@ -105,7 +122,16 @@ export default function PipelineMapping() {
                     </select>
                   </td>
                   <td>
-                    <button onClick={() => add(f)}>Add</button>
+                    <button
+                      disabled={mapping.columns.some(
+                        (c) => c.fieldPath === f.fieldPath
+                      )}
+                      onClick={() => add(f)}
+                    >
+                      {mapping.columns.some((c) => c.fieldPath === f.fieldPath)
+                        ? "Added"
+                        : "Add"}
+                    </button>
                   </td>
                 </tr>
               ))}

@@ -974,7 +974,9 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 		case http.MethodGet:
 			s.corsJSON(w)
 			if pr.mapping == nil {
-				_ = json.NewEncoder(w).Encode(&schema.Mapping{})
+				// Return an empty mapping with columns: [] instead of null
+				empty := &schema.Mapping{Columns: []schema.MapColumn{}}
+				_ = json.NewEncoder(w).Encode(empty)
 				return
 			}
 			_ = json.NewEncoder(w).Encode(pr.mapping)
@@ -1094,7 +1096,11 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		type field struct{ FieldPath, Column, Type string }
+		type field struct {
+			FieldPath string `json:"fieldPath"`
+			Column    string `json:"column"`
+			Type      string `json:"type"`
+		}
 		out := make([]field, 0, len(mp.Columns))
 		for _, c := range mp.Columns {
 			out = append(out, field{c.FieldPath, c.Column, c.Type})
@@ -1223,7 +1229,11 @@ func (s *Server) handleValidateKafkaSample(w http.ResponseWriter, r *http.Reques
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	type field struct{ FieldPath, Column, Type string }
+	type field struct {
+		FieldPath string `json:"fieldPath"`
+		Column    string `json:"column"`
+		Type      string `json:"type"`
+	}
 	cols := make([]field, 0, len(mp.Columns))
 	for _, c := range mp.Columns {
 		cols = append(cols, field{c.FieldPath, c.Column, c.Type})

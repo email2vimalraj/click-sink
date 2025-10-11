@@ -14,14 +14,14 @@ import (
 )
 
 type Mapping struct {
-	Columns []MapColumn `yaml:"columns"`
+	Columns []MapColumn `yaml:"columns" json:"columns"`
 }
 
 type MapColumn struct {
-	FieldPath string `yaml:"fieldPath"` // JSONPath-lite using dot notation
-	Column    string `yaml:"column"`
-	Type      string `yaml:"type"` // ClickHouse type
-	Nullable  bool   `yaml:"nullable"`
+	FieldPath string `yaml:"fieldPath" json:"fieldPath"` // JSONPath-lite using dot notation
+	Column    string `yaml:"column" json:"column"`
+	Type      string `yaml:"type" json:"type"` // ClickHouse type
+	Nullable  bool   `yaml:"nullable" json:"nullable"`
 }
 
 func ParseMapping(b []byte) (*Mapping, error) {
