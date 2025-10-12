@@ -18,7 +18,6 @@ import (
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
 	"github.com/yourname/click-sink/internal/store"
-	"gopkg.in/yaml.v3"
 )
 
 type Server struct {
@@ -65,6 +64,16 @@ func New(addr, dataDir string, sampleN int, tplFS fs.FS) (*Server, error) {
 	return s, nil
 }
 
+// NewWithStore allows injecting a custom PipelineStore implementation.
+func NewWithStore(addr string, sampleN int, st store.PipelineStore) (*Server, error) {
+	s := &Server{addr: addr, dataDir: "", sampleN: sampleN, pipelines: map[string]*pipelineRuntime{}, store: st}
+	// Load existing pipelines via store
+	if err := s.loadPipelines(); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
 func (s *Server) routes() http.Handler {
 	mux := http.NewServeMux()
 	// multi-pipeline endpoints
@@ -83,36 +92,6 @@ func (s *Server) Start() error { return http.ListenAndServe(s.addr, s.routes()) 
 // legacy single-pipeline HTML and direct control endpoints removed
 
 // helpers
-func splitCSV(s string) []string {
-	var out []string
-	cur := ""
-	for _, r := range s {
-		if r == ',' {
-			if cur != "" {
-				out = append(out, cur)
-				cur = ""
-			}
-			continue
-		}
-		if r == ' ' || r == '\n' || r == '\t' {
-			continue
-		}
-		cur += string(r)
-	}
-	if cur != "" {
-		out = append(out, cur)
-	}
-	return out
-}
-
-func atoiDefault(s string, d int) int {
-	if v, err := strconv.Atoi(s); err == nil {
-		return v
-	}
-	return d
-}
-
-func yamlMarshal(cfg *config.Config) ([]byte, error) { return yaml.Marshal(cfg) }
 
 // legacy single-pipeline sampling endpoint removed; use /api/pipelines/{id}/sample
 
@@ -709,6 +688,44 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 		s.corsJSON(w)
 		_ = json.NewEncoder(w).Encode(map[string]any{"running": pr.running, "started": pr.started, "lastErr": pr.lastErr, "totalRows": total, "lastBatch": lastBatch, "lastBatchAt": lastAt})
+	case "state":
+		// desired state CRUD via store
+		switch r.Method {
+		case http.MethodGet:
+			st, err := s.store.GetState(r.Context(), pr.id)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(st)
+		case http.MethodPut, http.MethodPatch:
+			var body struct {
+				Desired  string `json:"desired"`
+				Replicas int    `json:"replicas"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			if body.Replicas <= 0 {
+				body.Replicas = 1
+			}
+			var ds store.DesiredState
+			if strings.ToLower(body.Desired) == string(store.DesiredStarted) {
+				ds = store.DesiredStarted
+			} else {
+				ds = store.DesiredStopped
+			}
+			if err := s.store.SetDesiredState(r.Context(), pr.id, ds, body.Replicas); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	case "start":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

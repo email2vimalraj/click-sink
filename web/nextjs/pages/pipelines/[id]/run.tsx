@@ -1,19 +1,25 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, Status } from "../../../lib/api";
+import { api, Status, PipelineState } from "../../../lib/api";
 
 export default function PipelineRun() {
   const router = useRouter();
   const { id } = router.query;
   const [status, setStatus] = useState<Status | null>(null);
   const [err, setErr] = useState<string | undefined>();
+  const [state, setState] = useState<PipelineState | null>(null);
   const refresh = () => {
     if (typeof id === "string")
       api
         .pipelineStatus(id)
         .then(setStatus)
         .catch((e) => setErr(String(e)));
+    if (typeof id === "string")
+      api
+        .getPipelineState(id)
+        .then(setState)
+        .catch((e) => console.warn(e));
   };
   useEffect(() => {
     refresh();
@@ -33,6 +39,24 @@ export default function PipelineRun() {
     if (typeof id !== "string") return;
     try {
       await api.pipelineStop(id);
+      refresh();
+    } catch (e: any) {
+      alert(String(e));
+    }
+  };
+  const desiredStart = async () => {
+    if (typeof id !== "string") return;
+    try {
+      await api.setPipelineState(id, { desired: "started" });
+      refresh();
+    } catch (e: any) {
+      alert(String(e));
+    }
+  };
+  const desiredStop = async () => {
+    if (typeof id !== "string") return;
+    try {
+      await api.setPipelineState(id, { desired: "stopped" });
       refresh();
     } catch (e: any) {
       alert(String(e));
@@ -65,6 +89,9 @@ export default function PipelineRun() {
         <pre className="mb-4 rounded-md border border-slate-200 bg-white p-3 text-xs">
           {status ? JSON.stringify(status, null, 2) : "..."}
         </pre>
+        <pre className="mb-4 rounded-md border border-slate-200 bg-white p-3 text-xs">
+          {state ? JSON.stringify(state, null, 2) : "..."}
+        </pre>
         <div className="flex gap-2">
           <button onClick={start}>Start</button>
           <button
@@ -72,6 +99,13 @@ export default function PipelineRun() {
             onClick={stop}
           >
             Stop
+          </button>
+          <span className="mx-2" />
+          <button className="bg-green-600 text-white" onClick={desiredStart}>
+            Desired: Start
+          </button>
+          <button className="bg-orange-600 text-white" onClick={desiredStop}>
+            Desired: Stop
           </button>
         </div>
       </div>

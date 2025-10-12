@@ -24,6 +24,13 @@ export type Mapping = {
   columns: { fieldPath: string; column: string; type: string }[];
 };
 
+export type PipelineState = {
+  pipelineId: string;
+  desired: "started" | "stopped" | string;
+  replicas: number;
+  updatedAt: string;
+};
+
 export const api = {
   // legacy single-pipeline endpoints removed
   // Multi-pipeline APIs
@@ -111,6 +118,16 @@ export const api = {
       body: JSON.stringify(m),
     }),
   pipelineStatus: (id: string) => json<Status>(`/api/pipelines/${id}/status`),
+  getPipelineState: (id: string) =>
+    json<PipelineState>(`/api/pipelines/${id}/state`),
+  setPipelineState: (
+    id: string,
+    body: { desired: "started" | "stopped"; replicas?: number }
+  ) =>
+    json(`/api/pipelines/${id}/state`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   pipelineSample: (id: string, limit = 100) =>
     json<{ fieldPath: string; column: string; type: string }[]>(
       `/api/pipelines/${id}/sample?limit=${limit}`

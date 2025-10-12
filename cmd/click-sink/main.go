@@ -14,7 +14,9 @@ import (
 	"github.com/yourname/click-sink/internal/config"
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
+	"github.com/yourname/click-sink/internal/store"
 	"github.com/yourname/click-sink/internal/ui"
+	"github.com/yourname/click-sink/internal/worker"
 )
 
 type CLI struct {
@@ -33,6 +35,13 @@ type CLI struct {
 		Data   string `help:"Data directory to store config and mapping" default:".ui-data"`
 		Sample int    `help:"Sample size for detection" default:"100"`
 	} `cmd:"" help:"Launch web UI for configuring and running pipelines"`
+
+	Worker struct {
+		Data     string `help:"Data directory for store (same as UI)" default:".ui-data"`
+		Interval string `help:"Reconcile interval (e.g. 5s, 10s)" default:"5s"`
+		LeaseTTL string `help:"Lease TTL (e.g. 20s)" default:"20s"`
+		WorkerID string `help:"Override worker id (defaults to hostname:PORT)" default:""`
+	} `cmd:"" help:"Run background worker to reconcile desired state and execute pipelines"`
 }
 
 func main() {
@@ -110,6 +119,32 @@ func main() {
 		log.Printf("UI listening on %s", cli.UI.Listen)
 		if err := srv.Start(); err != nil {
 			log.Fatalf("ui: %v", err)
+		}
+	case "worker":
+		st := store.NewFSStore(cli.Worker.Data)
+		recon := 5 * time.Second
+		if d, err := time.ParseDuration(cli.Worker.Interval); err == nil {
+			recon = d
+		}
+		lease := 20 * time.Second
+		if d, err := time.ParseDuration(cli.Worker.LeaseTTL); err == nil {
+			lease = d
+		}
+		wid := cli.Worker.WorkerID
+		if wid == "" {
+			wid = worker.DefaultWorkerID()
+		}
+		r := worker.NewRunner(st, wid, recon, lease)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go func() {
+			c := make(chan os.Signal, 1)
+			signal.Notify(c, syscall.SIGINT, syscall.SIGTERM)
+			<-c
+			cancel()
+		}()
+		if err := r.Run(ctx); err != nil && err != context.Canceled {
+			log.Fatalf("worker: %v", err)
 		}
 	default:
 		time.Sleep(0)

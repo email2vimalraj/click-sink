@@ -1,0 +1,6 @@
+{
+  "pipelineId": "test-p1",
+  "desired": "started",
+  "replicas": 1,
+  "updatedAt": "2025-10-12T22:10:42.382859+08:00"
+}
