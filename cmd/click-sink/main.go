@@ -34,6 +34,8 @@ type CLI struct {
 		Listen string `help:"Listen address for the UI server" default:":8081"`
 		Data   string `help:"Data directory to store config and mapping" default:".ui-data"`
 		Sample int    `help:"Sample size for detection" default:"100"`
+		Store  string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
+		PgDSN  string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
 	} `cmd:"" help:"Launch web UI for configuring and running pipelines"`
 
 	Worker struct {
@@ -109,14 +111,29 @@ func main() {
 			log.Fatalf("pipeline error: %v", err)
 		}
 	case "ui":
-		// Launch UI server
-		// Embed templates via os.DirFS
-		tfs := os.DirFS("internal/ui/templates")
-		srv, err := ui.New(cli.UI.Listen, cli.UI.Data, cli.UI.Sample, tfs)
+		// Launch UI server with pluggable store backend
+		var srv *ui.Server
+		var err error
+		switch cli.UI.Store {
+		case "fs":
+			tfs := os.DirFS("internal/ui/templates")
+			srv, err = ui.New(cli.UI.Listen, cli.UI.Data, cli.UI.Sample, tfs)
+		case "pg":
+			if cli.UI.PgDSN == "" {
+				log.Fatalf("--pg-dsn is required when --store=pg")
+			}
+			st, err2 := store.NewPGStore(cli.UI.PgDSN)
+			if err2 != nil {
+				log.Fatalf("pg store: %v", err2)
+			}
+			srv, err = ui.NewWithStore(cli.UI.Listen, cli.UI.Sample, st)
+		default:
+			log.Fatalf("unknown store backend: %s", cli.UI.Store)
+		}
 		if err != nil {
 			log.Fatalf("ui: %v", err)
 		}
-		log.Printf("UI listening on %s", cli.UI.Listen)
+		log.Printf("UI listening on %s (store=%s)", cli.UI.Listen, cli.UI.Store)
 		if err := srv.Start(); err != nil {
 			log.Fatalf("ui: %v", err)
 		}
