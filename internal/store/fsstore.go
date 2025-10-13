@@ -6,6 +6,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -238,6 +240,116 @@ func (s *FSStore) Release(ctx context.Context, id, workerID string) error {
 	defer s.mu.Unlock()
 	leaseFile := filepath.Join(s.pipelinesDir(), id, "lease.json")
 	_ = os.Remove(leaseFile)
+	return nil
+}
+
+// Slot-based lease helpers (best-effort, local only)
+func (s *FSStore) ListAssignments(ctx context.Context, id string) ([]Assignment, error) {
+	dir := filepath.Join(s.pipelinesDir(), id)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Assignment{}, nil
+		}
+		return nil, err
+	}
+	out := []Assignment{}
+	for _, e := range entries {
+		name := e.Name()
+		if !strings.HasPrefix(name, "lease-") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		mid := strings.TrimSuffix(strings.TrimPrefix(name, "lease-"), ".json")
+		slot, err := strconv.Atoi(mid)
+		if err != nil {
+			continue
+		}
+		b, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			continue
+		}
+		var l struct {
+			WorkerID   string    `json:"workerId"`
+			LeaseUntil time.Time `json:"leaseUntil"`
+		}
+		if json.Unmarshal(b, &l) != nil {
+			continue
+		}
+		if time.Now().After(l.LeaseUntil) {
+			continue
+		}
+		out = append(out, Assignment{PipelineID: id, Slot: slot, WorkerID: l.WorkerID, LeaseUntil: l.LeaseUntil})
+	}
+	return out, nil
+}
+
+func (s *FSStore) TryAcquireSlot(ctx context.Context, id, workerID string, ttl time.Duration) (int, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// determine desired replicas to bound slot search
+	st, _ := s.GetState(ctx, id)
+	replicas := 1
+	if st != nil && st.Replicas > 0 {
+		replicas = st.Replicas
+	}
+	if replicas <= 0 {
+		replicas = 1
+	}
+	for slot := 0; slot < replicas; slot++ {
+		p := filepath.Join(s.pipelinesDir(), id, "lease-"+strconv.Itoa(slot)+".json")
+		var cur struct {
+			WorkerID   string    `json:"workerId"`
+			LeaseUntil time.Time `json:"leaseUntil"`
+		}
+		if b, err := os.ReadFile(p); err == nil {
+			_ = json.Unmarshal(b, &cur)
+			if time.Now().Before(cur.LeaseUntil) {
+				continue // occupied
+			}
+		}
+		cur.WorkerID = workerID
+		cur.LeaseUntil = time.Now().Add(ttl)
+		by, _ := json.Marshal(cur)
+		if err := os.WriteFile(p, by, 0o644); err != nil {
+			return -1, false, err
+		}
+		return slot, true, nil
+	}
+	return -1, false, nil
+}
+
+func (s *FSStore) RenewSlots(ctx context.Context, id, workerID string, slots []int, ttl time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, slot := range slots {
+		p := filepath.Join(s.pipelinesDir(), id, "lease-"+strconv.Itoa(slot)+".json")
+		b, err := os.ReadFile(p)
+		if err != nil {
+			continue
+		}
+		var cur struct {
+			WorkerID   string    `json:"workerId"`
+			LeaseUntil time.Time `json:"leaseUntil"`
+		}
+		if json.Unmarshal(b, &cur) != nil {
+			continue
+		}
+		if cur.WorkerID != workerID {
+			continue
+		}
+		cur.LeaseUntil = time.Now().Add(ttl)
+		by, _ := json.Marshal(cur)
+		_ = os.WriteFile(p, by, 0o644)
+	}
+	return nil
+}
+
+func (s *FSStore) ReleaseSlot(ctx context.Context, id, workerID string, slot int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := filepath.Join(s.pipelinesDir(), id, "lease-"+strconv.Itoa(slot)+".json")
+	// optional: check owner
+	_ = os.Remove(p)
 	return nil
 }
 

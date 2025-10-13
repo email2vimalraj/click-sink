@@ -726,6 +726,28 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case "assignments":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		as, err := s.store.ListAssignments(r.Context(), pr.id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// normalize for UI
+		rows := make([]map[string]any, 0, len(as))
+		for _, a := range as {
+			rows = append(rows, map[string]any{
+				"pipelineId": a.PipelineID,
+				"slot":       a.Slot,
+				"workerId":   a.WorkerID,
+				"leaseUntil": a.LeaseUntil,
+			})
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]any{"assignments": rows})
 	case "start":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

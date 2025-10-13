@@ -21,7 +21,7 @@ type Runner struct {
 	LeaseTTL       time.Duration
 
 	mu      sync.Mutex
-	running map[string]context.CancelFunc // pipelineID -> cancel
+	running map[string]*runningPipeline // pipelineID -> runningPipeline
 }
 
 func NewRunner(st store.PipelineStore, workerID string, reconcileEvery, leaseTTL time.Duration) *Runner {
@@ -31,7 +31,7 @@ func NewRunner(st store.PipelineStore, workerID string, reconcileEvery, leaseTTL
 	if leaseTTL <= 0 {
 		leaseTTL = 20 * time.Second
 	}
-	return &Runner{Store: st, WorkerID: workerID, ReconcileEvery: reconcileEvery, LeaseTTL: leaseTTL, running: map[string]context.CancelFunc{}}
+	return &Runner{Store: st, WorkerID: workerID, ReconcileEvery: reconcileEvery, LeaseTTL: leaseTTL, running: map[string]*runningPipeline{}}
 }
 
 // Run starts the reconcile loop until ctx is done.
@@ -54,10 +54,12 @@ func (r *Runner) Run(ctx context.Context) error {
 func (r *Runner) stopAll() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	for id, cancel := range r.running {
-		cancel()
+	for id, rp := range r.running {
+		for slot, cancel := range rp.slots {
+			cancel()
+			_ = r.Store.ReleaseSlot(context.Background(), id, r.WorkerID, slot)
+		}
 		delete(r.running, id)
-		_ = r.Store.Release(context.Background(), id, r.WorkerID)
 	}
 }
 
@@ -66,7 +68,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	now := time.Now()
+	// reconcile current desired state and owned slots
 	for _, p := range pls {
 		st, err := r.Store.GetState(ctx, p.ID)
 		if err != nil {
@@ -75,83 +77,93 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 		}
 		desiredStart := st != nil && st.Desired == store.DesiredStarted && st.Replicas > 0
 		r.mu.Lock()
-		_, isRunning := r.running[p.ID]
+		rp := r.running[p.ID]
+		isRunning := rp != nil && len(rp.slots) > 0
 		r.mu.Unlock()
 
 		if desiredStart {
-			if isRunning {
-				// renew lease
-				_ = r.Store.Renew(ctx, p.ID, r.WorkerID, r.LeaseTTL)
-				continue
-			}
-			// try acquire lease
-			ok, err := r.Store.TryAcquire(ctx, p.ID, r.WorkerID, r.LeaseTTL)
-			if err != nil {
-				log.Printf("worker: try acquire %s: %v", p.ID, err)
-				continue
-			}
-			if !ok {
-				continue
-			}
-			// load config and mapping
-			kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
-			hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
-			if kcfg == nil || hcfg == nil {
-				log.Printf("worker: %s missing configs", p.ID)
-				_ = r.Store.Release(ctx, p.ID, r.WorkerID)
-				continue
-			}
-			cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
-			y, _ := r.Store.GetMappingYAML(ctx, p.ID)
-			if len(y) == 0 {
-				log.Printf("worker: %s missing mapping", p.ID)
-				_ = r.Store.Release(ctx, p.ID, r.WorkerID)
-				continue
-			}
-			mp, err := schema.ParseMapping(y)
-			if err != nil {
-				log.Printf("worker: parse mapping %s: %v", p.ID, err)
-				_ = r.Store.Release(ctx, p.ID, r.WorkerID)
-				continue
-			}
-			obs := &logObserver{pipelineID: p.ID}
-			pl, err := pipeline.NewWithObserver(cfg, mp, obs)
-			if err != nil {
-				log.Printf("worker: init pipeline %s: %v", p.ID, err)
-				_ = r.Store.Release(ctx, p.ID, r.WorkerID)
-				continue
-			}
-			runCtx, cancel := context.WithCancel(ctx)
-			r.mu.Lock()
-			r.running[p.ID] = cancel
-			r.mu.Unlock()
-			go func(pid string) {
-				obs.OnStart()
-				err := pl.Run(runCtx)
-				if err != nil {
-					log.Printf("worker: pipeline %s error: %v", pid, err)
-					obs.OnError(err)
-				}
-				obs.OnStop()
+			// Ensure structure
+			if rp == nil {
+				rp = &runningPipeline{slots: map[int]context.CancelFunc{}}
 				r.mu.Lock()
-				delete(r.running, pid)
+				r.running[p.ID] = rp
 				r.mu.Unlock()
-				_ = r.Store.Release(context.Background(), pid, r.WorkerID)
-			}(p.ID)
-			_ = now
+			}
+			// Try acquire a new slot if we have capacity
+			slot, ok, err := r.Store.TryAcquireSlot(ctx, p.ID, r.WorkerID, r.LeaseTTL)
+			if err != nil {
+				log.Printf("worker: try acquire slot %s: %v", p.ID, err)
+			} else if ok {
+				// start a member for this slot
+				kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
+				hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
+				if kcfg == nil || hcfg == nil {
+					log.Printf("worker: %s missing configs", p.ID)
+					_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+				} else {
+					cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+					y, _ := r.Store.GetMappingYAML(ctx, p.ID)
+					if len(y) == 0 {
+						log.Printf("worker: %s missing mapping", p.ID)
+						_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+					} else if mp, err := schema.ParseMapping(y); err != nil {
+						log.Printf("worker: parse mapping %s: %v", p.ID, err)
+						_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+					} else {
+						obs := &logObserver{pipelineID: p.ID}
+						pl, err := pipeline.NewWithObserver(cfg, mp, obs)
+						if err != nil {
+							log.Printf("worker: init pipeline %s: %v", p.ID, err)
+							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+						} else {
+							runCtx, cancel := context.WithCancel(ctx)
+							r.mu.Lock()
+							rp.slots[slot] = cancel
+							r.mu.Unlock()
+							go func(pid string, sl int) {
+								obs.OnStart()
+								err := pl.Run(runCtx)
+								if err != nil {
+									log.Printf("worker: pipeline %s slot %d error: %v", pid, sl, err)
+									obs.OnError(err)
+								}
+								obs.OnStop()
+								r.mu.Lock()
+								delete(rp.slots, sl)
+								r.mu.Unlock()
+								_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
+							}(p.ID, slot)
+						}
+					}
+				}
+			}
+			// Renew all slots we own for this pipeline
+			r.mu.Lock()
+			slots := make([]int, 0, len(rp.slots))
+			for sl := range rp.slots {
+				slots = append(slots, sl)
+			}
+			r.mu.Unlock()
+			if len(slots) > 0 {
+				_ = r.Store.RenewSlots(ctx, p.ID, r.WorkerID, slots, r.LeaseTTL)
+			}
 		} else {
 			if isRunning {
+				// stop all owned slots
 				r.mu.Lock()
-				cancel := r.running[p.ID]
+				for sl, cancel := range rp.slots {
+					cancel()
+					_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, sl)
+				}
 				delete(r.running, p.ID)
 				r.mu.Unlock()
-				cancel()
-				_ = r.Store.Release(ctx, p.ID, r.WorkerID)
 			}
 		}
 	}
 	return nil
 }
+
+type runningPipeline struct{ slots map[int]context.CancelFunc }
 
 type logObserver struct {
 	pipelineID string
@@ -169,3 +181,5 @@ func DefaultWorkerID() string {
 	host, _ := os.Hostname()
 	return host + ":" + os.Getenv("PORT")
 }
+
+// no-op client id customization; sarama uses GroupID for coordination

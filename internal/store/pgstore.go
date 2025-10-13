@@ -58,19 +58,34 @@ func (s *PGStore) migrate() error {
             replicas INTEGER NOT NULL DEFAULT 1,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
         )`,
+		// Leases now support multiple slots per pipeline for replicas. We attempt
+		// to create the new shape and also alter if an older single-lease schema exists.
 		`CREATE TABLE IF NOT EXISTS leases (
-            pipeline_id TEXT PRIMARY KEY REFERENCES pipelines(id) ON DELETE CASCADE,
-            worker_id TEXT NOT NULL,
-            lease_until TIMESTAMPTZ NOT NULL
-        )`,
+			pipeline_id TEXT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+			slot INTEGER NOT NULL,
+			worker_id TEXT NOT NULL,
+			lease_until TIMESTAMPTZ NOT NULL,
+			PRIMARY KEY(pipeline_id, slot)
+		)`,
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st); err != nil {
 			return err
 		}
 	}
+	// Best-effort migration from old single-lease schema (if present)
+	// 1) Ensure columns exist
+	_ = tryExec(s.db, `ALTER TABLE leases ADD COLUMN IF NOT EXISTS slot INTEGER NOT NULL DEFAULT 0`)
+	_ = tryExec(s.db, `ALTER TABLE leases ADD COLUMN IF NOT EXISTS worker_id TEXT NOT NULL`)
+	_ = tryExec(s.db, `ALTER TABLE leases ADD COLUMN IF NOT EXISTS lease_until TIMESTAMPTZ NOT NULL DEFAULT now()`)
+	// 2) Ensure primary key on (pipeline_id, slot)
+	_ = tryExec(s.db, `ALTER TABLE leases DROP CONSTRAINT IF EXISTS leases_pkey`)
+	_ = tryExec(s.db, `ALTER TABLE leases ADD PRIMARY KEY(pipeline_id, slot)`)
+	_ = tryExec(s.db, `ALTER TABLE leases ALTER COLUMN slot DROP DEFAULT`)
 	return nil
 }
+
+func tryExec(db *sql.DB, q string) error { _, err := db.Exec(q); return err }
 
 // Pipeline CRUD
 func (s *PGStore) ListPipelines(ctx context.Context) ([]Pipeline, error) {
@@ -218,61 +233,97 @@ func (s *PGStore) SetDesiredState(ctx context.Context, id string, desired Desire
 	return err
 }
 
-// Leases (single-replica)
-func (s *PGStore) TryAcquire(ctx context.Context, id, workerID string, ttl time.Duration) (bool, error) {
-	// atomically acquire if expired or absent
+// Leases (slot-based multi-replica)
+func (s *PGStore) ListAssignments(ctx context.Context, id string) ([]Assignment, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT pipeline_id, slot, worker_id, lease_until FROM leases WHERE pipeline_id=$1 AND lease_until > now() ORDER BY slot`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Assignment{}
+	for rows.Next() {
+		var a Assignment
+		if err := rows.Scan(&a.PipelineID, &a.Slot, &a.WorkerID, &a.LeaseUntil); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+func (s *PGStore) TryAcquireSlot(ctx context.Context, id, workerID string, ttl time.Duration) (int, bool, error) {
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
-		return false, err
+		return -1, false, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var curWorker string
-	var leaseUntil time.Time
-	err = tx.QueryRowContext(ctx, `SELECT worker_id, lease_until FROM leases WHERE pipeline_id=$1 FOR UPDATE`, id).Scan(&curWorker, &leaseUntil)
-	if err != nil {
+	// desired replicas
+	var replicas int
+	if err := tx.QueryRowContext(ctx, `SELECT replicas FROM pipeline_state WHERE pipeline_id=$1`, id).Scan(&replicas); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			_, err = tx.ExecContext(ctx, `INSERT INTO leases(pipeline_id,worker_id,lease_until) VALUES($1,$2,$3)`, id, workerID, time.Now().Add(ttl))
-			if err != nil {
-				return false, err
-			}
-			if err := tx.Commit(); err != nil {
-				return false, err
-			}
-			return true, nil
+			replicas = 1
+		} else {
+			return -1, false, err
 		}
-		return false, err
 	}
-	if time.Now().After(leaseUntil) {
-		_, err = tx.ExecContext(ctx, `UPDATE leases SET worker_id=$2, lease_until=$3 WHERE pipeline_id=$1`, id, workerID, time.Now().Add(ttl))
-		if err != nil {
-			return false, err
-		}
-		if err := tx.Commit(); err != nil {
-			return false, err
-		}
-		return true, nil
+	if replicas <= 0 {
+		replicas = 1
 	}
-	// not expired
-	return false, nil
+	// lock current active leases for this pipeline
+	rows, err := tx.QueryContext(ctx, `SELECT slot FROM leases WHERE pipeline_id=$1 AND lease_until > now() FOR UPDATE`, id)
+	if err != nil {
+		return -1, false, err
+	}
+	defer rows.Close()
+	occupied := map[int]bool{}
+	for rows.Next() {
+		var sslot int
+		if err := rows.Scan(&sslot); err != nil {
+			return -1, false, err
+		}
+		occupied[sslot] = true
+	}
+	// find first free slot [0..replicas-1]
+	chosen := -1
+	for i := 0; i < replicas; i++ {
+		if !occupied[i] {
+			chosen = i
+			break
+		}
+	}
+	if chosen == -1 {
+		return -1, false, nil
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO leases(pipeline_id, slot, worker_id, lease_until) VALUES($1,$2,$3,$4)`, id, chosen, workerID, time.Now().Add(ttl))
+	if err != nil {
+		return -1, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return -1, false, err
+	}
+	return chosen, true, nil
 }
 
-func (s *PGStore) Renew(ctx context.Context, id, workerID string, ttl time.Duration) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE leases SET lease_until=$3 WHERE pipeline_id=$1 AND worker_id=$2`, id, workerID, time.Now().Add(ttl))
+func (s *PGStore) RenewSlots(ctx context.Context, id, workerID string, slots []int, ttl time.Duration) error {
+	if len(slots) == 0 {
+		return nil
+	}
+	// Renew all provided slots in a transaction (per-slot updates to avoid array binding)
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return errors.New("not owner")
+	defer func() { _ = tx.Rollback() }()
+	until := time.Now().Add(ttl)
+	for _, sl := range slots {
+		if _, err := tx.ExecContext(ctx, `UPDATE leases SET lease_until=$4 WHERE pipeline_id=$1 AND worker_id=$2 AND slot=$3`, id, workerID, sl, until); err != nil {
+			return err
+		}
 	}
-	return nil
+	return tx.Commit()
 }
 
-func (s *PGStore) Release(ctx context.Context, id, workerID string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM leases WHERE pipeline_id=$1 AND worker_id=$2`, id, workerID)
-	if err != nil {
-		return err
-	}
-	_ = res
-	return nil
+func (s *PGStore) ReleaseSlot(ctx context.Context, id, workerID string, slot int) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM leases WHERE pipeline_id=$1 AND worker_id=$2 AND slot=$3`, id, workerID, slot)
+	return err
 }

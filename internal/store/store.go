@@ -42,6 +42,7 @@ type PipelineState struct {
 // Assignment represents a running instance lease of a pipeline.
 type Assignment struct {
 	PipelineID string    `json:"pipelineId"`
+	Slot       int       `json:"slot"`
 	Replica    int       `json:"replica"`
 	WorkerID   string    `json:"workerId"`
 	LeaseUntil time.Time `json:"leaseUntil"`
@@ -69,8 +70,9 @@ type PipelineStore interface {
 	GetState(ctx context.Context, id string) (*PipelineState, error)
 	SetDesiredState(ctx context.Context, id string, desired DesiredState, replicas int) error
 
-	// Coordination: single-replica lease helpers
-	TryAcquire(ctx context.Context, id, workerID string, ttl time.Duration) (bool, error)
-	Renew(ctx context.Context, id, workerID string, ttl time.Duration) error
-	Release(ctx context.Context, id, workerID string) error
+	// Coordination: slot-based lease helpers for multi-replica
+	ListAssignments(ctx context.Context, id string) ([]Assignment, error)
+	TryAcquireSlot(ctx context.Context, id, workerID string, ttl time.Duration) (slot int, ok bool, err error)
+	RenewSlots(ctx context.Context, id, workerID string, slots []int, ttl time.Duration) error
+	ReleaseSlot(ctx context.Context, id, workerID string, slot int) error
 }
