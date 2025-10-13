@@ -39,10 +39,12 @@ type CLI struct {
 	} `cmd:"" help:"Launch web UI for configuring and running pipelines"`
 
 	Worker struct {
-		Data     string `help:"Data directory for store (same as UI)" default:".ui-data"`
+		Data     string `help:"Data directory for store (when --store=fs)" default:".ui-data"`
 		Interval string `help:"Reconcile interval (e.g. 5s, 10s)" default:"5s"`
 		LeaseTTL string `help:"Lease TTL (e.g. 20s)" default:"20s"`
 		WorkerID string `help:"Override worker id (defaults to hostname:PORT)" default:""`
+		Store    string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
+		PgDSN    string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
 	} `cmd:"" help:"Run background worker to reconcile desired state and execute pipelines"`
 }
 
@@ -138,7 +140,22 @@ func main() {
 			log.Fatalf("ui: %v", err)
 		}
 	case "worker":
-		st := store.NewFSStore(cli.Worker.Data)
+		var st store.PipelineStore
+		switch cli.Worker.Store {
+		case "fs":
+			st = store.NewFSStore(cli.Worker.Data)
+		case "pg":
+			if cli.Worker.PgDSN == "" {
+				log.Fatalf("--pg-dsn is required when --store=pg")
+			}
+			p, err := store.NewPGStore(cli.Worker.PgDSN)
+			if err != nil {
+				log.Fatalf("pg store: %v", err)
+			}
+			st = p
+		default:
+			log.Fatalf("unknown store backend: %s", cli.Worker.Store)
+		}
 		recon := 5 * time.Second
 		if d, err := time.ParseDuration(cli.Worker.Interval); err == nil {
 			recon = d
