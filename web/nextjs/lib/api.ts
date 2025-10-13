@@ -31,6 +31,13 @@ export type PipelineState = {
   updatedAt: string;
 };
 
+export type Assignment = {
+  pipelineId: string;
+  slot: number;
+  workerId: string;
+  leaseUntil: string;
+};
+
 export const api = {
   // legacy single-pipeline endpoints removed
   // Multi-pipeline APIs
@@ -128,6 +135,8 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(body),
     }),
+  getAssignments: (id: string) =>
+    json<{ assignments: Assignment[] }>(`/api/pipelines/${id}/assignments`),
   pipelineSample: (id: string, limit = 100) =>
     json<{ fieldPath: string; column: string; type: string }[]>(
       `/api/pipelines/${id}/sample?limit=${limit}`

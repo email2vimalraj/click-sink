@@ -1,7 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, Status, PipelineState } from "../../../lib/api";
+import { api, Status, PipelineState, Assignment } from "../../../lib/api";
 
 export default function PipelineRun() {
   const router = useRouter();
@@ -9,6 +9,7 @@ export default function PipelineRun() {
   const [status, setStatus] = useState<Status | null>(null);
   const [err, setErr] = useState<string | undefined>();
   const [state, setState] = useState<PipelineState | null>(null);
+  const [assignments, setAssignments] = useState<Assignment[] | null>(null);
   const refresh = () => {
     if (typeof id === "string")
       api
@@ -19,6 +20,11 @@ export default function PipelineRun() {
       api
         .getPipelineState(id)
         .then(setState)
+        .catch((e) => console.warn(e));
+    if (typeof id === "string")
+      api
+        .getAssignments(id)
+        .then((r) => setAssignments(r.assignments))
         .catch((e) => console.warn(e));
   };
   useEffect(() => {
@@ -62,6 +68,18 @@ export default function PipelineRun() {
       alert(String(e));
     }
   };
+  const updateReplicas = async (replicas: number) => {
+    if (typeof id !== "string") return;
+    try {
+      await api.setPipelineState(id, {
+        desired: (state?.desired as any) || "started",
+        replicas,
+      });
+      refresh();
+    } catch (e: any) {
+      alert(String(e));
+    }
+  };
   return (
     <main className="min-h-screen p-6">
       <div className="mx-auto max-w-4xl">
@@ -92,6 +110,18 @@ export default function PipelineRun() {
         <pre className="mb-4 rounded-md border border-slate-200 bg-white p-3 text-xs">
           {state ? JSON.stringify(state, null, 2) : "..."}
         </pre>
+        <div className="mb-4 flex items-center gap-2">
+          <label className="text-sm text-slate-700">Replicas</label>
+          <input
+            type="number"
+            min={1}
+            className="w-24 rounded border px-2 py-1"
+            value={state?.replicas || 1}
+            onChange={(e) =>
+              updateReplicas(Math.max(1, parseInt(e.target.value || "1", 10)))
+            }
+          />
+        </div>
         <div className="flex gap-2">
           <button onClick={start}>Start</button>
           <button
@@ -107,6 +137,25 @@ export default function PipelineRun() {
           <button className="bg-orange-600 text-white" onClick={desiredStop}>
             Desired: Stop
           </button>
+        </div>
+        <h2 className="mt-8 text-lg font-semibold">Assignments</h2>
+        <div className="mb-4 rounded-md border border-slate-200 bg-white p-3 text-xs">
+          {assignments ? (
+            assignments.length ? (
+              <ul>
+                {assignments.map((a) => (
+                  <li key={a.slot}>
+                    slot {a.slot} → {a.workerId} (leaseUntil{" "}
+                    {new Date(a.leaseUntil).toLocaleTimeString()})
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span>No active assignments</span>
+            )
+          ) : (
+            <span>...</span>
+          )}
         </div>
       </div>
     </main>
