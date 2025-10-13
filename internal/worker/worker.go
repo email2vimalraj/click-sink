@@ -19,6 +19,8 @@ type Runner struct {
 	WorkerID       string
 	ReconcileEvery time.Duration
 	LeaseTTL       time.Duration
+	// When true, skip slot leases entirely and start one local instance per started pipeline.
+	DisableLeases bool
 
 	mu      sync.Mutex
 	running map[string]*runningPipeline // pipelineID -> runningPipeline
@@ -57,7 +59,9 @@ func (r *Runner) stopAll() {
 	for id, rp := range r.running {
 		for slot, cancel := range rp.slots {
 			cancel()
-			_ = r.Store.ReleaseSlot(context.Background(), id, r.WorkerID, slot)
+			if !r.DisableLeases {
+				_ = r.Store.ReleaseSlot(context.Background(), id, r.WorkerID, slot)
+			}
 		}
 		delete(r.running, id)
 	}
@@ -89,63 +93,108 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 				r.running[p.ID] = rp
 				r.mu.Unlock()
 			}
-			// Try acquire a new slot if we have capacity
-			slot, ok, err := r.Store.TryAcquireSlot(ctx, p.ID, r.WorkerID, r.LeaseTTL)
-			if err != nil {
-				log.Printf("worker: try acquire slot %s: %v", p.ID, err)
-			} else if ok {
-				// start a member for this slot
-				kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
-				hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
-				if kcfg == nil || hcfg == nil {
-					log.Printf("worker: %s missing configs", p.ID)
-					_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
-				} else {
-					cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
-					y, _ := r.Store.GetMappingYAML(ctx, p.ID)
-					if len(y) == 0 {
-						log.Printf("worker: %s missing mapping", p.ID)
-						_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
-					} else if mp, err := schema.ParseMapping(y); err != nil {
-						log.Printf("worker: parse mapping %s: %v", p.ID, err)
-						_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+			if r.DisableLeases {
+				// simple mode: if not already running locally, start one instance
+				r.mu.Lock()
+				_, have := rp.slots[0]
+				r.mu.Unlock()
+				if !have {
+					kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
+					hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
+					if kcfg == nil || hcfg == nil {
+						log.Printf("worker: %s missing configs", p.ID)
 					} else {
-						obs := &logObserver{pipelineID: p.ID}
-						pl, err := pipeline.NewWithObserver(cfg, mp, obs)
-						if err != nil {
-							log.Printf("worker: init pipeline %s: %v", p.ID, err)
-							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+						cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+						y, _ := r.Store.GetMappingYAML(ctx, p.ID)
+						if len(y) == 0 {
+							log.Printf("worker: %s missing mapping", p.ID)
+						} else if mp, err := schema.ParseMapping(y); err != nil {
+							log.Printf("worker: parse mapping %s: %v", p.ID, err)
 						} else {
-							runCtx, cancel := context.WithCancel(ctx)
-							r.mu.Lock()
-							rp.slots[slot] = cancel
-							r.mu.Unlock()
-							go func(pid string, sl int) {
-								obs.OnStart()
-								err := pl.Run(runCtx)
-								if err != nil {
-									log.Printf("worker: pipeline %s slot %d error: %v", pid, sl, err)
-									obs.OnError(err)
-								}
-								obs.OnStop()
+							obs := &logObserver{pipelineID: p.ID}
+							pl, err := pipeline.NewWithObserver(cfg, mp, obs)
+							if err != nil {
+								log.Printf("worker: init pipeline %s: %v", p.ID, err)
+							} else {
+								runCtx, cancel := context.WithCancel(ctx)
 								r.mu.Lock()
-								delete(rp.slots, sl)
+								rp.slots[0] = cancel
 								r.mu.Unlock()
-								_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
-							}(p.ID, slot)
+								go func(pid string) {
+									obs.OnStart()
+									err := pl.Run(runCtx)
+									if err != nil {
+										log.Printf("worker: pipeline %s error: %v", pid, err)
+										obs.OnError(err)
+									}
+									obs.OnStop()
+									r.mu.Lock()
+									delete(rp.slots, 0)
+									r.mu.Unlock()
+								}(p.ID)
+							}
 						}
 					}
 				}
-			}
-			// Renew all slots we own for this pipeline
-			r.mu.Lock()
-			slots := make([]int, 0, len(rp.slots))
-			for sl := range rp.slots {
-				slots = append(slots, sl)
-			}
-			r.mu.Unlock()
-			if len(slots) > 0 {
-				_ = r.Store.RenewSlots(ctx, p.ID, r.WorkerID, slots, r.LeaseTTL)
+			} else {
+				// Try acquire a new slot if we have capacity
+				slot, ok, err := r.Store.TryAcquireSlot(ctx, p.ID, r.WorkerID, r.LeaseTTL)
+				if err != nil {
+					log.Printf("worker: try acquire slot %s: %v", p.ID, err)
+				} else if ok {
+					// start a member for this slot
+					kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
+					hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
+					if kcfg == nil || hcfg == nil {
+						log.Printf("worker: %s missing configs", p.ID)
+						_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+					} else {
+						cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+						y, _ := r.Store.GetMappingYAML(ctx, p.ID)
+						if len(y) == 0 {
+							log.Printf("worker: %s missing mapping", p.ID)
+							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+						} else if mp, err := schema.ParseMapping(y); err != nil {
+							log.Printf("worker: parse mapping %s: %v", p.ID, err)
+							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+						} else {
+							obs := &logObserver{pipelineID: p.ID}
+							pl, err := pipeline.NewWithObserver(cfg, mp, obs)
+							if err != nil {
+								log.Printf("worker: init pipeline %s: %v", p.ID, err)
+								_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+							} else {
+								runCtx, cancel := context.WithCancel(ctx)
+								r.mu.Lock()
+								rp.slots[slot] = cancel
+								r.mu.Unlock()
+								go func(pid string, sl int) {
+									obs.OnStart()
+									err := pl.Run(runCtx)
+									if err != nil {
+										log.Printf("worker: pipeline %s slot %d error: %v", pid, sl, err)
+										obs.OnError(err)
+									}
+									obs.OnStop()
+									r.mu.Lock()
+									delete(rp.slots, sl)
+									r.mu.Unlock()
+									_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
+								}(p.ID, slot)
+							}
+						}
+					}
+				}
+				// Renew all slots we own for this pipeline
+				r.mu.Lock()
+				slots := make([]int, 0, len(rp.slots))
+				for sl := range rp.slots {
+					slots = append(slots, sl)
+				}
+				r.mu.Unlock()
+				if len(slots) > 0 {
+					_ = r.Store.RenewSlots(ctx, p.ID, r.WorkerID, slots, r.LeaseTTL)
+				}
 			}
 		} else {
 			if isRunning {
@@ -153,7 +202,9 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 				r.mu.Lock()
 				for sl, cancel := range rp.slots {
 					cancel()
-					_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, sl)
+					if !r.DisableLeases {
+						_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, sl)
+					}
 				}
 				delete(r.running, p.ID)
 				r.mu.Unlock()

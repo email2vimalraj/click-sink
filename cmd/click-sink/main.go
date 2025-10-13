@@ -45,6 +45,7 @@ type CLI struct {
 		WorkerID string `help:"Override worker id (defaults to hostname:PORT)" default:""`
 		Store    string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
 		PgDSN    string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
+		NoLeases bool   `help:"Disable leases and let every worker start a local instance for each started pipeline (naive mode)" default:"false"`
 	} `cmd:"" help:"Run background worker to reconcile desired state and execute pipelines"`
 }
 
@@ -169,6 +170,7 @@ func main() {
 			wid = worker.DefaultWorkerID()
 		}
 		r := worker.NewRunner(st, wid, recon, lease)
+		r.DisableLeases = cli.Worker.NoLeases
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go func() {
