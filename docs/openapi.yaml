@@ -331,6 +331,85 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Status'
+  /api/pipelines/{id}/state:
+    get:
+      summary: Get desired state and replicas for a pipeline
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineState'
+    put:
+      summary: Set desired state and replicas
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                desired:
+                  type: string
+                  enum: [started, stopped]
+                replicas:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200': { description: OK }
+    patch:
+      summary: Update desired state and/or replicas
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                desired:
+                  type: string
+                  enum: [started, stopped]
+                replicas:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200': { description: OK }
+  /api/pipelines/{id}/assignments:
+    get:
+      summary: List current lease assignments (replica slots) for a pipeline
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  assignments:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Assignment'
   /api/pipelines/{id}/start:
     post:
       summary: Start pipeline
@@ -431,6 +510,22 @@ paths:
 
 components:
   schemas:
+    PipelineState:
+      type: object
+      properties:
+        pipelineId: { type: string }
+        desired:
+          type: string
+          enum: [started, stopped]
+        replicas: { type: integer }
+        updatedAt: { type: string, format: date-time }
+    Assignment:
+      type: object
+      properties:
+        pipelineId: { type: string }
+        slot: { type: integer }
+        workerId: { type: string }
+        leaseUntil: { type: string, format: date-time }
     PipelineBasic:
       type: object
       properties:
