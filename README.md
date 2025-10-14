@@ -26,6 +26,8 @@ go run ./cmd/click-sink worker --store=pg --pg-dsn="postgres://sink:sink@localho
 
 In the UI Run tab, set desired state to "started" and adjust replicas. Workers will acquire per-replica slots and run consumers.
 
+Optional: if you prefer a simpler mode without coordination, start the worker with `--no-leases`. In that mode, each worker will run one instance per started pipeline, ignoring the replicas setting.
+
 ## Features
 
 - Multi-pipeline management (CRUD)
@@ -54,6 +56,8 @@ The OpenAPI 3.1 spec lives at `docs/openapi.yaml`. Highlights:
 - Horizontal scaling: set `replicas` in desired state; each replica corresponds to one lease slot persisted in Postgres.
 - Workers attempt to acquire free slots and renew them periodically. If a worker dies, leases expire after `lease-ttl`, allowing others to take over.
 - Vertical scaling (multiple members per process) is supported by the worker acquiring more than one slot per pipeline when available. Fine-grained limits per worker instance can be added later.
+
+For a deeper explanation of replicas, slots, leases, scenarios, and the alternative no-leases mode, see `docs/Architecture.md`.
 
 ## Development
 
