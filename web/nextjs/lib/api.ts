@@ -38,6 +38,14 @@ export type Assignment = {
   leaseUntil: string;
 };
 
+export type Claim = {
+  pipelineId: string;
+  workerId: string;
+  topic: string;
+  partition: number;
+  lastSeen: string;
+};
+
 export const api = {
   // legacy single-pipeline endpoints removed
   // Multi-pipeline APIs
@@ -137,6 +145,8 @@ export const api = {
     }),
   getAssignments: (id: string) =>
     json<{ assignments: Assignment[] }>(`/api/pipelines/${id}/assignments`),
+  getClaims: (id: string) =>
+    json<{ claims: Claim[] }>(`/api/pipelines/${id}/claims`),
   listWorkers: () =>
     json<{
       workers: {

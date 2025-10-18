@@ -73,6 +73,14 @@ func (s *PGStore) migrate() error {
             version TEXT NOT NULL,
             last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
         )`,
+		`CREATE TABLE IF NOT EXISTS claims (
+			pipeline_id TEXT NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
+			worker_id TEXT NOT NULL,
+			topic TEXT NOT NULL,
+			partition INTEGER NOT NULL,
+			last_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY(pipeline_id, worker_id, topic, partition)
+		)`,
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st); err != nil {
@@ -363,6 +371,37 @@ func (s *PGStore) ListWorkers(ctx context.Context) ([]Worker, error) {
 			return nil, err
 		}
 		out = append(out, w)
+	}
+	return out, rows.Err()
+}
+
+// Claims
+func (s *PGStore) UpsertClaim(ctx context.Context, pipelineID, workerID, topic string, partition int) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO claims(pipeline_id, worker_id, topic, partition, last_seen)
+		VALUES($1,$2,$3,$4,now())
+		ON CONFLICT(pipeline_id, worker_id, topic, partition) DO UPDATE SET last_seen=now()`,
+		pipelineID, workerID, topic, partition)
+	return err
+}
+
+func (s *PGStore) RemoveClaim(ctx context.Context, pipelineID, workerID, topic string, partition int) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM claims WHERE pipeline_id=$1 AND worker_id=$2 AND topic=$3 AND partition=$4`, pipelineID, workerID, topic, partition)
+	return err
+}
+
+func (s *PGStore) ListClaims(ctx context.Context, pipelineID string) ([]Claim, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT pipeline_id, worker_id, topic, partition, last_seen FROM claims WHERE pipeline_id=$1 ORDER BY topic, partition`, pipelineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Claim
+	for rows.Next() {
+		var c Claim
+		if err := rows.Scan(&c.PipelineID, &c.WorkerID, &c.Topic, &c.Partition, &c.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	return out, rows.Err()
 }

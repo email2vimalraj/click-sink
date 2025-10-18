@@ -1,7 +1,13 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { api, Status, PipelineState, Assignment } from "../../../lib/api";
+import {
+  api,
+  Status,
+  PipelineState,
+  Assignment,
+  Claim,
+} from "../../../lib/api";
 
 export default function PipelineRun() {
   const router = useRouter();
@@ -10,6 +16,7 @@ export default function PipelineRun() {
   const [err, setErr] = useState<string | undefined>();
   const [state, setState] = useState<PipelineState | null>(null);
   const [assignments, setAssignments] = useState<Assignment[] | null>(null);
+  const [claims, setClaims] = useState<Claim[] | null>(null);
   const [mode, setMode] = useState<"leases" | "no-leases" | "mixed" | null>(
     null
   );
@@ -28,6 +35,11 @@ export default function PipelineRun() {
       api
         .getAssignments(id)
         .then((r) => setAssignments(r.assignments))
+        .catch((e) => console.warn(e));
+    if (typeof id === "string")
+      api
+        .getClaims(id)
+        .then((r) => setClaims(r.claims))
         .catch((e) => console.warn(e));
     api
       .listWorkers()
@@ -199,6 +211,25 @@ export default function PipelineRun() {
               </ul>
             ) : (
               <span>No active assignments</span>
+            )
+          ) : (
+            <span>...</span>
+          )}
+        </div>
+        <h2 className="mt-8 text-lg font-semibold">Consumer group ownership</h2>
+        <div className="mb-4 rounded-md border border-slate-200 bg-white p-3 text-xs">
+          {claims ? (
+            claims.length ? (
+              <ul>
+                {claims.map((c, i) => (
+                  <li key={`${c.workerId}-${c.topic}-${c.partition}-${i}`}>
+                    {c.topic} p{c.partition} → {c.workerId} (lastSeen{" "}
+                    {new Date(c.lastSeen).toLocaleTimeString()})
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <span>No observed consumer claims</span>
             )
           ) : (
             <span>...</span>

@@ -755,6 +755,28 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 		}
 		s.corsJSON(w)
 		_ = json.NewEncoder(w).Encode(map[string]any{"assignments": rows})
+	case "claims":
+		if r.Method != http.MethodGet {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		cs, err := s.store.ListClaims(r.Context(), pr.id)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		rows := make([]map[string]any, 0, len(cs))
+		for _, c := range cs {
+			rows = append(rows, map[string]any{
+				"pipelineId": c.PipelineID,
+				"workerId":   c.WorkerID,
+				"topic":      c.Topic,
+				"partition":  c.Partition,
+				"lastSeen":   c.LastSeen,
+			})
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(map[string]any{"claims": rows})
 	case "start":
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -362,6 +362,17 @@ func (s *FSStore) ListWorkers(ctx context.Context) ([]Worker, error) {
 	return []Worker{}, nil
 }
 
+// Claims (no-op for FS store)
+func (s *FSStore) UpsertClaim(ctx context.Context, pipelineID, workerID, topic string, partition int) error {
+	return nil
+}
+func (s *FSStore) RemoveClaim(ctx context.Context, pipelineID, workerID, topic string, partition int) error {
+	return nil
+}
+func (s *FSStore) ListClaims(ctx context.Context, pipelineID string) ([]Claim, error) {
+	return []Claim{}, nil
+}
+
 // Helpers
 func sanitizeID(s string) string {
 	if s == "" {

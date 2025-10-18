@@ -131,6 +131,8 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 							if err != nil {
 								log.Printf("worker: init pipeline %s: %v", p.ID, err)
 							} else {
+								// record consumer group partition assignments for UI
+								pl.WithClaimObserver(&claimRecorder{store: r.Store, pipelineID: p.ID, workerID: r.WorkerID})
 								runCtx, cancel := context.WithCancel(ctx)
 								r.mu.Lock()
 								rp.slots[0] = cancel
@@ -204,6 +206,8 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 											log.Printf("worker: init pipeline %s: %v", p.ID, err)
 											_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
 										} else {
+											// record consumer group partition assignments for UI
+											pl.WithClaimObserver(&claimRecorder{store: r.Store, pipelineID: p.ID, workerID: r.WorkerID})
 											runCtx, cancel := context.WithCancel(ctx)
 											r.mu.Lock()
 											rp.slots[slot] = cancel
@@ -256,6 +260,8 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 									log.Printf("worker: init pipeline %s: %v", p.ID, err)
 									_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
 								} else {
+									// record consumer group partition assignments for UI
+									pl.WithClaimObserver(&claimRecorder{store: r.Store, pipelineID: p.ID, workerID: r.WorkerID})
 									runCtx, cancel := context.WithCancel(ctx)
 									r.mu.Lock()
 									rp.slots[slot] = cancel
@@ -304,6 +310,8 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 								log.Printf("worker: init pipeline %s: %v", p.ID, err)
 								_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
 							} else {
+								// record consumer group partition assignments for UI
+								pl.WithClaimObserver(&claimRecorder{store: r.Store, pipelineID: p.ID, workerID: r.WorkerID})
 								runCtx, cancel := context.WithCancel(ctx)
 								r.mu.Lock()
 								rp.slots[slot] = cancel
@@ -432,6 +440,20 @@ func (l *logObserver) OnError(err error) { log.Printf("pipeline %s: error: %v", 
 func (l *logObserver) OnStop()           { log.Printf("pipeline %s: stopped", l.pipelineID) }
 func (l *logObserver) OnBatchInserted(n int, total int64, at time.Time) {
 	log.Printf("pipeline %s: batch=%d total=%d at=%s", l.pipelineID, n, total, at.Format(time.RFC3339))
+}
+
+// claimRecorder writes partition claim info into the store for UI consumption
+type claimRecorder struct {
+	store      store.PipelineStore
+	pipelineID string
+	workerID   string
+}
+
+func (c *claimRecorder) OnPartitionAssigned(groupID, clientID, topic string, partition int32) {
+	_ = c.store.UpsertClaim(context.Background(), c.pipelineID, c.workerID, topic, int(partition))
+}
+func (c *claimRecorder) OnPartitionReleased(groupID, clientID, topic string, partition int32) {
+	_ = c.store.RemoveClaim(context.Background(), c.pipelineID, c.workerID, topic, int(partition))
 }
 
 // DefaultWorkerID attempts to form a stable worker id.

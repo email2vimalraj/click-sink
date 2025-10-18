@@ -17,45 +17,57 @@ type Message struct {
 	Ack       func()
 }
 
+// ClaimObserver is notified when partitions are assigned/revoked for this consumer.
+type ClaimObserver interface {
+	OnPartitionAssigned(groupID, clientID, topic string, partition int32)
+	OnPartitionReleased(groupID, clientID, topic string, partition int32)
+}
+
 type Consumer struct {
-	group sarama.ConsumerGroup
-	topic string
-	name  string
+	group   sarama.ConsumerGroup
+	topic   string
+	name    string
+	groupID string
+	obs     ClaimObserver
 }
 
 func NewConsumer(cfg *config.KafkaConfig, clientID string) (*Consumer, error) {
-	return NewConsumerWithInitial(cfg, clientID, sarama.OffsetNewest)
+	return NewConsumerWithObserver(cfg, clientID, sarama.OffsetNewest, nil)
 }
 
 func NewConsumerWithInitial(cfg *config.KafkaConfig, clientID string, initialOffset int64) (*Consumer, error) {
-	config := sarama.NewConfig()
-	config.Version = sarama.V3_5_0_0
-	config.ClientID = clientID
-	config.Consumer.Return.Errors = true
-	config.Consumer.Offsets.Initial = initialOffset
-	config.Metadata.Full = true
+	return NewConsumerWithObserver(cfg, clientID, initialOffset, nil)
+}
+
+func NewConsumerWithObserver(cfg *config.KafkaConfig, clientID string, initialOffset int64, obs ClaimObserver) (*Consumer, error) {
+	sc := sarama.NewConfig()
+	sc.Version = sarama.V3_5_0_0
+	sc.ClientID = clientID
+	sc.Consumer.Return.Errors = true
+	sc.Consumer.Offsets.Initial = initialOffset
+	sc.Metadata.Full = true
 	// Prefer round-robin assignment for more even distribution across members
-	config.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
+	sc.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
 
 	// Security
 	switch cfg.SecurityProtocol {
 	case "SASL_SSL", "SASL_PLAINTEXT":
-		config.Net.SASL.Enable = true
-		config.Net.SASL.User = cfg.SASLUsername
-		config.Net.SASL.Password = cfg.SASLPassword
+		sc.Net.SASL.Enable = true
+		sc.Net.SASL.User = cfg.SASLUsername
+		sc.Net.SASL.Password = cfg.SASLPassword
 		switch cfg.SASLMechanism {
 		case "PLAIN":
-			config.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
 		case "SCRAM-SHA-256":
-			config.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
+			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
 		case "SCRAM-SHA-512":
-			config.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
+			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
 		default:
 			// default PLAIN if provided
-			config.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
 		}
 		if cfg.SecurityProtocol == "SASL_SSL" {
-			config.Net.TLS.Enable = true
+			sc.Net.TLS.Enable = true
 		}
 	case "PLAINTEXT", "":
 		// nothing
@@ -63,11 +75,11 @@ func NewConsumerWithInitial(cfg *config.KafkaConfig, clientID string, initialOff
 		return nil, fmt.Errorf("unsupported securityProtocol: %s", cfg.SecurityProtocol)
 	}
 
-	group, err := sarama.NewConsumerGroup(cfg.Brokers, cfg.GroupID, config)
+	group, err := sarama.NewConsumerGroup(cfg.Brokers, cfg.GroupID, sc)
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{group: group, topic: cfg.Topic, name: clientID}, nil
+	return &Consumer{group: group, topic: cfg.Topic, name: clientID, groupID: cfg.GroupID, obs: obs}, nil
 }
 
 func (c *Consumer) Close() error { return c.group.Close() }
@@ -77,7 +89,7 @@ func (c *Consumer) Consume(ctx context.Context) (<-chan Message, <-chan error) {
 	out := make(chan Message, 1000)
 	errCh := make(chan error, 1)
 
-	h := &handler{topic: c.topic, out: out, name: c.name}
+	h := &handler{topic: c.topic, out: out, name: c.name, groupID: c.groupID, obs: c.obs}
 	go func() {
 		defer close(out)
 		for {
@@ -94,9 +106,11 @@ func (c *Consumer) Consume(ctx context.Context) (<-chan Message, <-chan error) {
 }
 
 type handler struct {
-	topic string
-	out   chan<- Message
-	name  string
+	topic   string
+	out     chan<- Message
+	name    string
+	groupID string
+	obs     ClaimObserver
 }
 
 func (h *handler) Setup(sarama.ConsumerGroupSession) error   { return nil }
@@ -105,6 +119,10 @@ func (h *handler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 func (h *handler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
 	if os.Getenv("KAFKA_DEBUG") != "" {
 		log.Printf("kafka[%s]: consuming topic=%s partition=%d from offset=%d", h.name, claim.Topic(), claim.Partition(), claim.InitialOffset())
+	}
+	if h.obs != nil {
+		h.obs.OnPartitionAssigned(h.groupID, h.name, claim.Topic(), claim.Partition())
+		defer h.obs.OnPartitionReleased(h.groupID, h.name, claim.Topic(), claim.Partition())
 	}
 	for msg := range claim.Messages() {
 		m := msg

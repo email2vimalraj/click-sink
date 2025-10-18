@@ -57,6 +57,15 @@ type Worker struct {
 	LastSeen time.Time `json:"lastSeen"`
 }
 
+// Claim represents a consumer group partition ownership observed at runtime.
+type Claim struct {
+	PipelineID string    `json:"pipelineId"`
+	WorkerID   string    `json:"workerId"`
+	Topic      string    `json:"topic"`
+	Partition  int       `json:"partition"`
+	LastSeen   time.Time `json:"lastSeen"`
+}
+
 // PipelineStore abstracts persistence and basic coordination.
 type PipelineStore interface {
 	// Pipeline CRUD
@@ -87,4 +96,9 @@ type PipelineStore interface {
 	// Worker registry (optional for FS store), used by UI to display cluster view
 	UpsertWorkerHeartbeat(ctx context.Context, workerID, mode, version string) error
 	ListWorkers(ctx context.Context) ([]Worker, error)
+
+	// Runtime claims (optional for FS store)
+	UpsertClaim(ctx context.Context, pipelineID, workerID, topic string, partition int) error
+	RemoveClaim(ctx context.Context, pipelineID, workerID, topic string, partition int) error
+	ListClaims(ctx context.Context, pipelineID string) ([]Claim, error)
 }

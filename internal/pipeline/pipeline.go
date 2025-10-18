@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/IBM/sarama"
 	"github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
 	kfk "github.com/yourname/click-sink/internal/kafka"
@@ -23,6 +24,7 @@ type Pipeline struct {
 	insertRate int // inserts/sec (0 = unlimited)
 	obs        Observer
 	totalRows  int64
+	claimObs   kfk.ClaimObserver
 }
 
 // Observer provides callbacks for pipeline events.
@@ -52,6 +54,12 @@ func NewWithObserver(cfg *config.Config, m *schema.Mapping, obs Observer) (*Pipe
 	return p, nil
 }
 
+// WithClaimObserver attaches a partition claim observer; optional.
+func (p *Pipeline) WithClaimObserver(co kfk.ClaimObserver) *Pipeline {
+	p.claimObs = co
+	return p
+}
+
 func (p *Pipeline) Run(ctx context.Context) error {
 	defer p.ch.Close()
 	if p.obs != nil {
@@ -69,7 +77,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		return err
 	}
 
-	consumer, err := kfk.NewConsumer(&p.cfg.Kafka, "click-sink")
+	consumer, err := kfk.NewConsumerWithObserver(&p.cfg.Kafka, "click-sink", sarama.OffsetNewest, p.claimObs)
 	if err != nil {
 		return err
 	}
