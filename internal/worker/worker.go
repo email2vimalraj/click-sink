@@ -21,6 +21,8 @@ type Runner struct {
 	LeaseTTL       time.Duration
 	// When true, skip slot leases entirely and start one local instance per started pipeline.
 	DisableLeases bool
+	// Optional: cap how many slots this worker can own per pipeline (0 = unlimited)
+	MaxSlotsPerPipeline int
 
 	mu      sync.Mutex
 	running map[string]*runningPipeline // pipelineID -> runningPipeline
@@ -144,6 +146,110 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 				}
 			} else {
 				// Try acquire a new slot if we have capacity
+				if r.MaxSlotsPerPipeline > 0 {
+					r.mu.Lock()
+					if len(rp.slots) >= r.MaxSlotsPerPipeline {
+						r.mu.Unlock()
+						// Already at cap; just renew below
+					} else {
+						r.mu.Unlock()
+						slot, ok, err := r.Store.TryAcquireSlot(ctx, p.ID, r.WorkerID, r.LeaseTTL)
+						if err != nil {
+							log.Printf("worker: try acquire slot %s: %v", p.ID, err)
+						} else if ok {
+							// start a member for this slot
+							kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
+							hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
+							if kcfg == nil || hcfg == nil {
+								log.Printf("worker: %s missing configs", p.ID)
+								_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+							} else {
+								cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+								y, _ := r.Store.GetMappingYAML(ctx, p.ID)
+								if len(y) == 0 {
+									log.Printf("worker: %s missing mapping", p.ID)
+									_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+								} else if mp, err := schema.ParseMapping(y); err != nil {
+									log.Printf("worker: parse mapping %s: %v", p.ID, err)
+									_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+								} else {
+									obs := &logObserver{pipelineID: p.ID}
+									pl, err := pipeline.NewWithObserver(cfg, mp, obs)
+									if err != nil {
+										log.Printf("worker: init pipeline %s: %v", p.ID, err)
+										_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+									} else {
+										runCtx, cancel := context.WithCancel(ctx)
+										r.mu.Lock()
+										rp.slots[slot] = cancel
+										r.mu.Unlock()
+										go func(pid string, sl int) {
+											obs.OnStart()
+											err := pl.Run(runCtx)
+											if err != nil {
+												log.Printf("worker: pipeline %s slot %d error: %v", pid, sl, err)
+												obs.OnError(err)
+											}
+											obs.OnStop()
+											r.mu.Lock()
+											delete(rp.slots, sl)
+											r.mu.Unlock()
+											_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
+										}(p.ID, slot)
+									}
+								}
+							}
+						}
+					}
+				} else {
+					slot, ok, err := r.Store.TryAcquireSlot(ctx, p.ID, r.WorkerID, r.LeaseTTL)
+					if err != nil {
+						log.Printf("worker: try acquire slot %s: %v", p.ID, err)
+					} else if ok {
+						// start a member for this slot
+						kcfg, _ := r.Store.GetKafkaConfig(ctx, p.ID)
+						hcfg, _ := r.Store.GetClickHouseConfig(ctx, p.ID)
+						if kcfg == nil || hcfg == nil {
+							log.Printf("worker: %s missing configs", p.ID)
+							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+						} else {
+							cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+							y, _ := r.Store.GetMappingYAML(ctx, p.ID)
+							if len(y) == 0 {
+								log.Printf("worker: %s missing mapping", p.ID)
+								_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+							} else if mp, err := schema.ParseMapping(y); err != nil {
+								log.Printf("worker: parse mapping %s: %v", p.ID, err)
+								_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+							} else {
+								obs := &logObserver{pipelineID: p.ID}
+								pl, err := pipeline.NewWithObserver(cfg, mp, obs)
+								if err != nil {
+									log.Printf("worker: init pipeline %s: %v", p.ID, err)
+									_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
+								} else {
+									runCtx, cancel := context.WithCancel(ctx)
+									r.mu.Lock()
+									rp.slots[slot] = cancel
+									r.mu.Unlock()
+									go func(pid string, sl int) {
+										obs.OnStart()
+										err := pl.Run(runCtx)
+										if err != nil {
+											log.Printf("worker: pipeline %s slot %d error: %v", pid, sl, err)
+											obs.OnError(err)
+										}
+										obs.OnStop()
+										r.mu.Lock()
+										delete(rp.slots, sl)
+										r.mu.Unlock()
+										_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
+									}(p.ID, slot)
+								}
+							}
+						}
+					}
+				}
 				slot, ok, err := r.Store.TryAcquireSlot(ctx, p.ID, r.WorkerID, r.LeaseTTL)
 				if err != nil {
 					log.Printf("worker: try acquire slot %s: %v", p.ID, err)

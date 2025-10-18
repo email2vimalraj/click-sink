@@ -71,7 +71,10 @@ export default function PipelineRun() {
   const desiredStart = async () => {
     if (typeof id !== "string") return;
     try {
-      await api.setPipelineState(id, { desired: "started" });
+      await api.setPipelineState(id, {
+        desired: "started",
+        replicas: state?.replicas || 1,
+      });
       refresh();
     } catch (e: any) {
       alert(String(e));

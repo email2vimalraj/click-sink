@@ -710,8 +710,13 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), 400)
 				return
 			}
+			// Preserve existing replicas when omitted or invalid
 			if body.Replicas <= 0 {
-				body.Replicas = 1
+				if cur, err := s.store.GetState(r.Context(), pr.id); err == nil && cur != nil && cur.Replicas > 0 {
+					body.Replicas = cur.Replicas
+				} else {
+					body.Replicas = 1
+				}
 			}
 			var ds store.DesiredState
 			if strings.ToLower(body.Desired) == string(store.DesiredStarted) {
