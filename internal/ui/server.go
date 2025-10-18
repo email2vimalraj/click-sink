@@ -15,9 +15,11 @@ import (
 	ch "github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
 	kaf "github.com/yourname/click-sink/internal/kafka"
+	"github.com/yourname/click-sink/internal/metrics"
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
 	"github.com/yourname/click-sink/internal/store"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
@@ -81,6 +83,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("/api/pipelines/", s.handleAPIPipeline)
 	// workers endpoint
 	mux.HandleFunc("/api/workers", s.handleAPIWorkers)
+	// Prometheus metrics
+	mux.Handle("/metrics", promhttp.Handler())
 	// validation endpoints
 	mux.HandleFunc("/api/validate/kafka", s.handleValidateKafka)
 	mux.HandleFunc("/api/validate/kafka/sample", s.handleValidateKafkaSample)
@@ -103,6 +107,7 @@ type stats struct {
 	totalRows   int64
 	lastBatch   int
 	lastBatchAt time.Time
+	pipelineID  string
 }
 
 func (s *stats) OnStart()      {}
@@ -114,6 +119,10 @@ func (s *stats) OnBatchInserted(batchRows int, totalRows int64, at time.Time) {
 	s.lastBatch = batchRows
 	s.lastBatchAt = at
 	s.mu.Unlock()
+	if s.pipelineID != "" {
+		metrics.IncBatch(s.pipelineID)
+		metrics.AddRows(s.pipelineID, batchRows)
+	}
 }
 func (s *stats) TotalRows() int64       { s.mu.Lock(); defer s.mu.Unlock(); return s.totalRows }
 func (s *stats) LastBatch() int         { s.mu.Lock(); defer s.mu.Unlock(); return s.lastBatch }
@@ -791,7 +800,7 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "config and mapping required", 400)
 			return
 		}
-		pr.stats = &stats{}
+	pr.stats = &stats{pipelineID: pr.id}
 		p, err := pipeline.NewWithObserver(pr.cfg, pr.mapping, pr.stats)
 		if err != nil {
 			http.Error(w, err.Error(), 500)

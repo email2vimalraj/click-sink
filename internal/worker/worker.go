@@ -4,11 +4,14 @@ import (
 	"context"
 	"log"
 	"math/rand"
+	"net/http"
 	"os"
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/yourname/click-sink/internal/config"
+	"github.com/yourname/click-sink/internal/metrics"
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
 	"github.com/yourname/click-sink/internal/store"
@@ -47,6 +50,20 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		return "leases"
 	}(), r.MaxSlotsPerPipeline, r.ReconcileEvery.String(), r.LeaseTTL.String())
+
+	// Start /metrics endpoint in background
+	go func() {
+		port := os.Getenv("PORT_METRICS")
+		if port == "" {
+			port = "2112"
+		}
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		srv := &http.Server{Addr: ":" + port, Handler: mux}
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("worker: metrics server error: %v", err)
+		}
+	}()
 	ticker := time.NewTicker(r.ReconcileEvery)
 	defer ticker.Stop()
 	for {
@@ -411,6 +428,10 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 					}
 				}
 			}
+			// Update metrics gauge with current local active assignments for this pipeline
+			r.mu.Lock()
+			metrics.SetActiveAssignments(p.ID, len(rp.slots))
+			r.mu.Unlock()
 		} else {
 			if isRunning {
 				// stop all owned slots
@@ -423,6 +444,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 				}
 				delete(r.running, p.ID)
 				r.mu.Unlock()
+				metrics.SetActiveAssignments(p.ID, 0)
 			}
 		}
 	}
@@ -450,6 +472,7 @@ type claimRecorder struct {
 }
 
 func (c *claimRecorder) OnPartitionAssigned(groupID, clientID, topic string, partition int32) {
+	metrics.IncRebalance(c.pipelineID)
 	_ = c.store.UpsertClaim(context.Background(), c.pipelineID, c.workerID, topic, int(partition))
 }
 func (c *claimRecorder) OnPartitionReleased(groupID, clientID, topic string, partition int32) {

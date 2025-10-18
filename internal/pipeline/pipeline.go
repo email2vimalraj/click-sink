@@ -12,6 +12,7 @@ import (
 	"github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
 	kfk "github.com/yourname/click-sink/internal/kafka"
+	"github.com/yourname/click-sink/internal/metrics"
 	"github.com/yourname/click-sink/internal/schema"
 )
 
@@ -60,12 +61,13 @@ func (p *Pipeline) WithClaimObserver(co kfk.ClaimObserver) *Pipeline {
 	return p
 }
 
+// Run starts consuming from Kafka, maps messages, and inserts batches into ClickHouse until ctx is done.
 func (p *Pipeline) Run(ctx context.Context) error {
 	defer p.ch.Close()
 	if p.obs != nil {
 		p.obs.OnStart()
 	}
-	// Ensure table
+	// Ensure table exists
 	cols := make([]clickhouse.Column, len(p.mapg.Columns))
 	for i, c := range p.mapg.Columns {
 		cols[i] = clickhouse.Column{Name: c.Column, Type: c.Type}
@@ -84,8 +86,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 	defer consumer.Close()
 	msgs, errCh := consumer.Consume(ctx)
 
-	rows := make([]clickhouse.Row, 0, p.batchSize)
-	var mu sync.Mutex
+	var (
+		mu   sync.Mutex
+		rows []clickhouse.Row
+	)
 	flush := func() error {
 		mu.Lock()
 		defer mu.Unlock()
@@ -94,16 +98,22 @@ func (p *Pipeline) Run(ctx context.Context) error {
 		}
 		r := rows
 		rows = make([]clickhouse.Row, 0, p.batchSize)
+		started := time.Now()
 		if err := p.ch.InsertBatch(ctx, p.cfg.ClickHouse.Table, cols, r); err != nil {
 			if p.obs != nil {
 				p.obs.OnError(err)
 			}
+			metrics.IncError(p.cfg.Kafka.GroupID, "insert")
 			return err
 		}
 		total := atomic.AddInt64(&p.totalRows, int64(len(r)))
 		if p.obs != nil {
 			p.obs.OnBatchInserted(len(r), total, time.Now())
 		}
+		// Use Kafka groupID as a proxy for pipeline identity when running standalone
+		metrics.IncBatch(p.cfg.Kafka.GroupID)
+		metrics.AddRows(p.cfg.Kafka.GroupID, len(r))
+		metrics.ObserveInsertLatency(p.cfg.Kafka.GroupID, time.Since(started).Seconds())
 		return nil
 	}
 
@@ -127,12 +137,10 @@ func (p *Pipeline) Run(ctx context.Context) error {
 			if p.obs != nil {
 				p.obs.OnError(err)
 			}
+			metrics.IncError(p.cfg.Kafka.GroupID, "kafka")
 			return err
 		case <-flushTimer.C:
 			if err := flush(); err != nil {
-				if p.obs != nil {
-					p.obs.OnError(err)
-				}
 				return err
 			}
 			flushTimer.Reset(p.flushEvery)
