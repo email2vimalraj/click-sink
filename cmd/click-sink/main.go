@@ -31,12 +31,20 @@ type CLI struct {
 	Run struct{} `cmd:"" help:"Run the Kafka→ClickHouse sink pipeline"`
 
 	UI struct {
-		Listen string `help:"Listen address for the UI server" default:":8081"`
+		Listen string `help:"Listen address for the API server" default:":8081"`
 		Data   string `help:"Data directory to store config and mapping" default:".ui-data"`
 		Sample int    `help:"Sample size for detection" default:"100"`
 		Store  string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
 		PgDSN  string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
-	} `cmd:"" help:"Launch web UI for configuring and running pipelines"`
+	} `cmd:"" help:"[Deprecated] Launch API server (use the 'api' command instead)"`
+
+	API struct {
+		Listen string `help:"Listen address for the API server" default:":8081"`
+		Data   string `help:"Data directory to store config and mapping (when --store=fs)" default:".ui-data"`
+		Sample int    `help:"Sample size for detection" default:"100"`
+		Store  string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
+		PgDSN  string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
+	} `cmd:"" help:"Launch API server for configuring and running pipelines"`
 
 	Worker struct {
 		Data                string `help:"Data directory for store (when --store=fs)" default:".ui-data"`
@@ -115,31 +123,46 @@ func main() {
 			log.Fatalf("pipeline error: %v", err)
 		}
 	case "ui":
-		// Launch UI server with pluggable store backend
+		// Backward-compat alias for API server
+		log.Printf("[DEPRECATION] The 'ui' command is deprecated. Use 'api' instead.")
+		fallthrough
+	case "api":
+		// Launch API server with pluggable store backend
+		var listen, data string
+		var sample int
+		var backend, dsn string
+		// If invoked via 'api', use cli.API; else fall back to cli.UI
+		if ctx.Command() == "api" {
+			listen, data, sample = cli.API.Listen, cli.API.Data, cli.API.Sample
+			backend, dsn = cli.API.Store, cli.API.PgDSN
+		} else {
+			listen, data, sample = cli.UI.Listen, cli.UI.Data, cli.UI.Sample
+			backend, dsn = cli.UI.Store, cli.UI.PgDSN
+		}
 		var srv *ui.Server
 		var err error
-		switch cli.UI.Store {
+		switch backend {
 		case "fs":
 			tfs := os.DirFS("internal/ui/templates")
-			srv, err = ui.New(cli.UI.Listen, cli.UI.Data, cli.UI.Sample, tfs)
+			srv, err = ui.New(listen, data, sample, tfs)
 		case "pg":
-			if cli.UI.PgDSN == "" {
+			if dsn == "" {
 				log.Fatalf("--pg-dsn is required when --store=pg")
 			}
-			st, err2 := store.NewPGStore(cli.UI.PgDSN)
+			st, err2 := store.NewPGStore(dsn)
 			if err2 != nil {
 				log.Fatalf("pg store: %v", err2)
 			}
-			srv, err = ui.NewWithStore(cli.UI.Listen, cli.UI.Sample, st)
+			srv, err = ui.NewWithStore(listen, sample, st)
 		default:
-			log.Fatalf("unknown store backend: %s", cli.UI.Store)
+			log.Fatalf("unknown store backend: %s", backend)
 		}
 		if err != nil {
-			log.Fatalf("ui: %v", err)
+			log.Fatalf("api: %v", err)
 		}
-		log.Printf("UI listening on %s (store=%s)", cli.UI.Listen, cli.UI.Store)
+		log.Printf("API listening on %s (store=%s)", listen, backend)
 		if err := srv.Start(); err != nil {
-			log.Fatalf("ui: %v", err)
+			log.Fatalf("api: %v", err)
 		}
 	case "worker":
 		var st store.PipelineStore
