@@ -3,6 +3,8 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"log"
+	"os"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -18,6 +20,7 @@ type Message struct {
 type Consumer struct {
 	group sarama.ConsumerGroup
 	topic string
+	name  string
 }
 
 func NewConsumer(cfg *config.KafkaConfig, clientID string) (*Consumer, error) {
@@ -31,6 +34,8 @@ func NewConsumerWithInitial(cfg *config.KafkaConfig, clientID string, initialOff
 	config.Consumer.Return.Errors = true
 	config.Consumer.Offsets.Initial = initialOffset
 	config.Metadata.Full = true
+	// Prefer round-robin assignment for more even distribution across members
+	config.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
 
 	// Security
 	switch cfg.SecurityProtocol {
@@ -62,7 +67,7 @@ func NewConsumerWithInitial(cfg *config.KafkaConfig, clientID string, initialOff
 	if err != nil {
 		return nil, err
 	}
-	return &Consumer{group: group, topic: cfg.Topic}, nil
+	return &Consumer{group: group, topic: cfg.Topic, name: clientID}, nil
 }
 
 func (c *Consumer) Close() error { return c.group.Close() }
@@ -72,7 +77,7 @@ func (c *Consumer) Consume(ctx context.Context) (<-chan Message, <-chan error) {
 	out := make(chan Message, 1000)
 	errCh := make(chan error, 1)
 
-	h := &handler{topic: c.topic, out: out}
+	h := &handler{topic: c.topic, out: out, name: c.name}
 	go func() {
 		defer close(out)
 		for {
@@ -91,12 +96,16 @@ func (c *Consumer) Consume(ctx context.Context) (<-chan Message, <-chan error) {
 type handler struct {
 	topic string
 	out   chan<- Message
+	name  string
 }
 
 func (h *handler) Setup(sarama.ConsumerGroupSession) error   { return nil }
 func (h *handler) Cleanup(sarama.ConsumerGroupSession) error { return nil }
 
 func (h *handler) ConsumeClaim(sess sarama.ConsumerGroupSession, claim sarama.ConsumerGroupClaim) error {
+	if os.Getenv("KAFKA_DEBUG") != "" {
+		log.Printf("kafka[%s]: consuming topic=%s partition=%d from offset=%d", h.name, claim.Topic(), claim.Partition(), claim.InitialOffset())
+	}
 	for msg := range claim.Messages() {
 		m := msg
 		h.out <- Message{
