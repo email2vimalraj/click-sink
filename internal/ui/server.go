@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	ch "github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
 	kaf "github.com/yourname/click-sink/internal/kafka"
@@ -19,7 +20,6 @@ import (
 	"github.com/yourname/click-sink/internal/pipeline"
 	"github.com/yourname/click-sink/internal/schema"
 	"github.com/yourname/click-sink/internal/store"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Server struct {
@@ -800,7 +800,7 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "config and mapping required", 400)
 			return
 		}
-	pr.stats = &stats{pipelineID: pr.id}
+		pr.stats = &stats{pipelineID: pr.id}
 		p, err := pipeline.NewWithObserver(pr.cfg, pr.mapping, pr.stats)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
