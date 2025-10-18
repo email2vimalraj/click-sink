@@ -137,6 +137,15 @@ export const api = {
     }),
   getAssignments: (id: string) =>
     json<{ assignments: Assignment[] }>(`/api/pipelines/${id}/assignments`),
+  listWorkers: () =>
+    json<{
+      workers: {
+        workerId: string;
+        mode: string;
+        version: string;
+        lastSeen: string;
+      }[];
+    }>(`/api/workers`),
   pipelineSample: (id: string, limit = 100) =>
     json<{ fieldPath: string; column: string; type: string }[]>(
       `/api/pipelines/${id}/sample?limit=${limit}`

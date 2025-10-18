@@ -41,6 +41,12 @@ func (r *Runner) Run(ctx context.Context) error {
 	ticker := time.NewTicker(r.ReconcileEvery)
 	defer ticker.Stop()
 	for {
+		// Heartbeat to store for visibility
+		mode := "leases"
+		if r.DisableLeases {
+			mode = "no-leases"
+		}
+		_ = r.Store.UpsertWorkerHeartbeat(ctx, r.WorkerID, mode, "dev")
 		if err := r.reconcileOnce(ctx); err != nil {
 			log.Printf("worker: reconcile error: %v", err)
 		}
@@ -194,6 +200,41 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 				r.mu.Unlock()
 				if len(slots) > 0 {
 					_ = r.Store.RenewSlots(ctx, p.ID, r.WorkerID, slots, r.LeaseTTL)
+				}
+
+				// Graceful scale-down: if desired replicas decreased, stop extra slots (highest first)
+				if st != nil && st.Replicas > 0 {
+					// Determine extra slots (> replicas-1)
+					r.mu.Lock()
+					extra := []int{}
+					for sl := range rp.slots {
+						if sl >= st.Replicas {
+							extra = append(extra, sl)
+						}
+					}
+					r.mu.Unlock()
+					if len(extra) > 0 {
+						// Sort descending
+						// small inline sort to avoid import; bubble for tiny N
+						for i := 0; i < len(extra); i++ {
+							for j := i + 1; j < len(extra); j++ {
+								if extra[i] < extra[j] {
+									extra[i], extra[j] = extra[j], extra[i]
+								}
+							}
+						}
+						for _, sl := range extra {
+							r.mu.Lock()
+							cancel := rp.slots[sl]
+							delete(rp.slots, sl)
+							r.mu.Unlock()
+							if cancel != nil {
+								cancel()
+							}
+							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, sl)
+							log.Printf("worker: pipeline %s released extra slot %d due to scale down", p.ID, sl)
+						}
+					}
 				}
 			}
 		} else {

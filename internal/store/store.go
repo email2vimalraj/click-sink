@@ -49,6 +49,14 @@ type Assignment struct {
 	Heartbeat  time.Time `json:"heartbeat"`
 }
 
+// Worker describes a registered worker process.
+type Worker struct {
+	WorkerID string    `json:"workerId"`
+	Mode     string    `json:"mode"` // "leases" or "no-leases"
+	Version  string    `json:"version"`
+	LastSeen time.Time `json:"lastSeen"`
+}
+
 // PipelineStore abstracts persistence and basic coordination.
 type PipelineStore interface {
 	// Pipeline CRUD
@@ -75,4 +83,8 @@ type PipelineStore interface {
 	TryAcquireSlot(ctx context.Context, id, workerID string, ttl time.Duration) (slot int, ok bool, err error)
 	RenewSlots(ctx context.Context, id, workerID string, slots []int, ttl time.Duration) error
 	ReleaseSlot(ctx context.Context, id, workerID string, slot int) error
+
+	// Worker registry (optional for FS store), used by UI to display cluster view
+	UpsertWorkerHeartbeat(ctx context.Context, workerID, mode, version string) error
+	ListWorkers(ctx context.Context) ([]Worker, error)
 }

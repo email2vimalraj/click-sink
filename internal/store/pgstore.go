@@ -67,6 +67,12 @@ func (s *PGStore) migrate() error {
 			lease_until TIMESTAMPTZ NOT NULL,
 			PRIMARY KEY(pipeline_id, slot)
 		)`,
+		`CREATE TABLE IF NOT EXISTS workers (
+            worker_id TEXT PRIMARY KEY,
+            mode TEXT NOT NULL,
+            version TEXT NOT NULL,
+            last_seen TIMESTAMPTZ NOT NULL DEFAULT now()
+        )`,
 	}
 	for _, st := range stmts {
 		if _, err := s.db.Exec(st); err != nil {
@@ -326,4 +332,37 @@ func (s *PGStore) RenewSlots(ctx context.Context, id, workerID string, slots []i
 func (s *PGStore) ReleaseSlot(ctx context.Context, id, workerID string, slot int) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM leases WHERE pipeline_id=$1 AND worker_id=$2 AND slot=$3`, id, workerID, slot)
 	return err
+}
+
+// Worker registry
+func (s *PGStore) UpsertWorkerHeartbeat(ctx context.Context, workerID, mode, version string) error {
+	if workerID == "" {
+		return errors.New("workerID required")
+	}
+	if mode == "" {
+		mode = "leases"
+	}
+	if version == "" {
+		version = "dev"
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO workers(worker_id, mode, version, last_seen) VALUES($1,$2,$3,now())
+		ON CONFLICT(worker_id) DO UPDATE SET mode=EXCLUDED.mode, version=EXCLUDED.version, last_seen=now()`, workerID, mode, version)
+	return err
+}
+
+func (s *PGStore) ListWorkers(ctx context.Context) ([]Worker, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT worker_id, mode, version, last_seen FROM workers ORDER BY worker_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Worker
+	for rows.Next() {
+		var w Worker
+		if err := rows.Scan(&w.WorkerID, &w.Mode, &w.Version, &w.LastSeen); err != nil {
+			return nil, err
+		}
+		out = append(out, w)
+	}
+	return out, rows.Err()
 }

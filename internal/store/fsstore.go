@@ -353,6 +353,15 @@ func (s *FSStore) ReleaseSlot(ctx context.Context, id, workerID string, slot int
 	return nil
 }
 
+// Worker registry (best-effort no-op for FS store)
+func (s *FSStore) UpsertWorkerHeartbeat(ctx context.Context, workerID, mode, version string) error {
+	return nil
+}
+
+func (s *FSStore) ListWorkers(ctx context.Context) ([]Worker, error) {
+	return []Worker{}, nil
+}
+
 // Helpers
 func sanitizeID(s string) string {
 	if s == "" {

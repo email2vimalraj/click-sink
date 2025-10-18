@@ -79,6 +79,8 @@ func (s *Server) routes() http.Handler {
 	// multi-pipeline endpoints
 	mux.HandleFunc("/api/pipelines", s.handleAPIPipelines)
 	mux.HandleFunc("/api/pipelines/", s.handleAPIPipeline)
+	// workers endpoint
+	mux.HandleFunc("/api/workers", s.handleAPIWorkers)
 	// validation endpoints
 	mux.HandleFunc("/api/validate/kafka", s.handleValidateKafka)
 	mux.HandleFunc("/api/validate/kafka/sample", s.handleValidateKafkaSample)
@@ -840,6 +842,36 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// GET /api/workers
+func (s *Server) handleAPIWorkers(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodOptions {
+		s.cors(w)
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	ws, err := s.store.ListWorkers(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	// Normalize
+	rows := make([]map[string]any, 0, len(ws))
+	for _, wkr := range ws {
+		rows = append(rows, map[string]any{
+			"workerId": wkr.WorkerID,
+			"mode":     wkr.Mode,
+			"version":  wkr.Version,
+			"lastSeen": wkr.LastSeen,
+		})
+	}
+	s.corsJSON(w)
+	_ = json.NewEncoder(w).Encode(map[string]any{"workers": rows})
 }
 
 func splitPath(s string) []string {

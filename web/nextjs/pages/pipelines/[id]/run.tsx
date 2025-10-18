@@ -10,6 +10,9 @@ export default function PipelineRun() {
   const [err, setErr] = useState<string | undefined>();
   const [state, setState] = useState<PipelineState | null>(null);
   const [assignments, setAssignments] = useState<Assignment[] | null>(null);
+  const [mode, setMode] = useState<"leases" | "no-leases" | "mixed" | null>(
+    null
+  );
   const refresh = () => {
     if (typeof id === "string")
       api
@@ -26,6 +29,21 @@ export default function PipelineRun() {
         .getAssignments(id)
         .then((r) => setAssignments(r.assignments))
         .catch((e) => console.warn(e));
+    api
+      .listWorkers()
+      .then(({ workers }) => {
+        if (!workers || workers.length === 0) {
+          setMode(null);
+        } else {
+          const modes = new Set(
+            workers.map((w) => (w.mode as any) || "leases")
+          );
+          if (modes.size === 1)
+            setMode((Array.from(modes)[0] as any) || "leases");
+          else setMode("mixed");
+        }
+      })
+      .catch(() => setMode(null));
   };
   useEffect(() => {
     refresh();
@@ -110,6 +128,31 @@ export default function PipelineRun() {
         <pre className="mb-4 rounded-md border border-slate-200 bg-white p-3 text-xs">
           {state ? JSON.stringify(state, null, 2) : "..."}
         </pre>
+        {mode && (
+          <div
+            className={`mb-4 rounded border p-2 text-sm ${
+              mode === "no-leases"
+                ? "border-orange-300 bg-orange-50 text-orange-700"
+                : mode === "mixed"
+                ? "border-yellow-300 bg-yellow-50 text-yellow-700"
+                : "border-emerald-300 bg-emerald-50 text-emerald-700"
+            }`}
+          >
+            Worker mode: {mode}
+            {mode === "no-leases" && (
+              <span className="ml-2 text-xs">
+                Replicas are ignored in no-leases mode. Each worker runs one
+                instance per pipeline.
+              </span>
+            )}
+            {mode === "mixed" && (
+              <span className="ml-2 text-xs">
+                Mixed modes detected. Prefer running all workers with leases or
+                all with no-leases.
+              </span>
+            )}
+          </div>
+        )}
         <div className="mb-4 flex items-center gap-2">
           <label className="text-sm text-slate-700">Replicas</label>
           <input
@@ -120,6 +163,7 @@ export default function PipelineRun() {
             onChange={(e) =>
               updateReplicas(Math.max(1, parseInt(e.target.value || "1", 10)))
             }
+            disabled={mode === "no-leases"}
           />
         </div>
         <div className="flex gap-2">
