@@ -39,13 +39,14 @@ type CLI struct {
 	} `cmd:"" help:"Launch web UI for configuring and running pipelines"`
 
 	Worker struct {
-		Data     string `help:"Data directory for store (when --store=fs)" default:".ui-data"`
-		Interval string `help:"Reconcile interval (e.g. 5s, 10s)" default:"5s"`
-		LeaseTTL string `help:"Lease TTL (e.g. 20s)" default:"20s"`
-		WorkerID string `help:"Override worker id (defaults to hostname:PORT)" default:""`
-		Store    string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
-		PgDSN    string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
-		NoLeases bool   `help:"Disable leases and let every worker start a local instance for each started pipeline (naive mode)" default:"false"`
+		Data                string `help:"Data directory for store (when --store=fs)" default:".ui-data"`
+		Interval            string `help:"Reconcile interval (e.g. 5s, 10s)" default:"5s"`
+		LeaseTTL            string `help:"Lease TTL (e.g. 20s)" default:"20s"`
+		WorkerID            string `help:"Override worker id (defaults to hostname:PORT)" default:""`
+		Store               string `help:"Persistence backend: fs or pg" enum:"fs,pg" default:"fs"`
+		PgDSN               string `help:"Postgres DSN when --store=pg (e.g. postgres://user:pass@host:5432/db?sslmode=disable)" default:""`
+		NoLeases            bool   `help:"Disable leases and let every worker start a local instance for each started pipeline (naive mode)" default:"false"`
+		MaxSlotsPerPipeline int    `help:"Cap how many replica slots this worker can own per pipeline (0 = unlimited)" default:"0"`
 	} `cmd:"" help:"Run background worker to reconcile desired state and execute pipelines"`
 }
 
@@ -171,6 +172,7 @@ func main() {
 		}
 		r := worker.NewRunner(st, wid, recon, lease)
 		r.DisableLeases = cli.Worker.NoLeases
+		r.MaxSlotsPerPipeline = cli.Worker.MaxSlotsPerPipeline
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
 		go func() {
