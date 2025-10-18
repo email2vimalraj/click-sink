@@ -28,7 +28,7 @@ func main() {
 	for i := 0; i < *n; i++ {
 		msg := map[string]any{
 			"user":  map[string]any{"id": i + 1, "email": fmt.Sprintf("user%02d@example.com", i+1)},
-			"event": map[string]any{"ts": time.Now().UTC().Format(time.RFC3339), "type": "test", "value": float64(i)},
+			"event": map[string]any{"ts": time.Now().UTC().Format("2006-01-02 15:04:05.000"), "type": "test", "value": float64(i)},
 		}
 		bts, _ := json.Marshal(msg)
 		m := &sarama.ProducerMessage{Topic: *topic, Value: sarama.ByteEncoder(bts)}
