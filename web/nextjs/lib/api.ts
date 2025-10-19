@@ -92,6 +92,7 @@ export const api = {
     json<{
       fields: { fieldPath: string; column: string; type: string }[];
       mappingYAML?: string;
+      notice?: string;
     }>(`/api/validate/kafka/sample`, {
       method: "POST",
       body: JSON.stringify({ kafka: kafkaCfg, limit }),

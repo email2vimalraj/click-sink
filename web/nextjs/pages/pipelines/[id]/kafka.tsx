@@ -9,6 +9,7 @@ export default function PipelineKafka() {
   const [cfg, setCfg] = useState<any>({ brokers: [], topic: "", groupID: "" });
   const [status, setStatus] = useState<string>("");
   const [err, setErr] = useState<string | undefined>();
+  const [notice, setNotice] = useState<string | undefined>();
   const [sample, setSample] = useState<
     { fieldPath: string; column: string; type: string }[]
   >([]);
@@ -58,10 +59,12 @@ export default function PipelineKafka() {
   const infer = async () => {
     setStatus("Sampling...");
     setErr(undefined);
+    setNotice(undefined);
     try {
       const res = await api.validateKafkaSample(normalize(), 100);
       setSample(res.fields);
-      setStatus("Sampled");
+      if (res.notice) setNotice(res.notice);
+      setStatus(res.fields.length > 0 ? "Sampled" : "No fields inferred");
     } catch (e: any) {
       setErr(String(e));
       setStatus("");
@@ -86,6 +89,7 @@ export default function PipelineKafka() {
         <h1>Pipeline {id} - Kafka</h1>
         {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
         {status && <p className="mb-2 text-sm text-green-700">{status}</p>}
+        {notice && <p className="mb-2 text-sm text-slate-600">{notice}</p>}
         <div className="grid grid-cols-1 gap-3">
           <input
             placeholder="brokers (comma separated)"

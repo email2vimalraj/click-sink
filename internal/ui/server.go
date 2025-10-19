@@ -1023,8 +1023,13 @@ func (s *Server) handleValidateKafkaSample(w http.ResponseWriter, r *http.Reques
 	for _, c := range mp.Columns {
 		cols = append(cols, field{c.FieldPath, c.Column, c.Type})
 	}
+	// If no columns were inferred, include a helpful notice for the UI
+	notice := ""
+	if len(cols) == 0 {
+		notice = "No messages were sampled (topic empty or sampling timed out). If running via Docker, set brokers to kafka:9092 and ensure the topic has JSON messages."
+	}
 	s.corsJSON(w)
-	_ = json.NewEncoder(w).Encode(map[string]any{"mappingYAML": string(y), "fields": cols})
+	_ = json.NewEncoder(w).Encode(map[string]any{"mappingYAML": string(y), "fields": cols, "notice": notice})
 }
 
 // ClickHouse connectivity validation

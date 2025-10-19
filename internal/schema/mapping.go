@@ -44,7 +44,7 @@ func (m *Mapping) ToYAML() ([]byte, error) {
 
 // DetectAndRecommend samples messages and emits a suggested mapping.
 func DetectAndRecommend(ctx context.Context, cfg *config.Config, sample int) ([]byte, error) {
-	payloads, err := kafka.Sample(ctx, &cfg.Kafka, sample)
+	payloads, err := kafka.SamplePreferGroupThenDirect(ctx, &cfg.Kafka, sample)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			empty := Mapping{Columns: []MapColumn{}}

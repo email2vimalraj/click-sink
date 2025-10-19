@@ -80,3 +80,11 @@ go run ./cmd/click-sink ui --store=fs --listen=:8081
 ```
 
 The filesystem store is best-effort and not suitable for multiple nodes. Prefer Postgres.
+
+## Troubleshooting
+
+- Kafka sampling shows "Sampled" but no fields:
+  - Ensure your Kafka brokers are reachable from the API container. With the provided docker-compose, set brokers to `kafka:9092` (not `localhost:9092`).
+  - Make sure the topic contains some JSON messages. The sampler reads from the oldest offset in a temporary group and times out after ~10s if it can't receive messages.
+  - If using SASL/TLS, verify credentials and protocols in the Kafka config.
+- 502 at the root URL when using nginx: confirm the UI container listens on port 3000 and the nginx upstream points to `click-sink-ui:3000`.
