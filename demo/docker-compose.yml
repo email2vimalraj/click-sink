@@ -32,7 +32,7 @@ services:
     ports:
       - "8080:8080"
     environment:
-      KAFKA_BROKERS: kafka:29092
+      KAFKA_BROKERS: kafka:9092
       SERVER_LISTEN_ADDRESS: 0.0.0.0:8080
       CONSOLE_SERVE_STATIC: "true"
 
@@ -79,7 +79,6 @@ services:
       dockerfile: Dockerfile
     command:
       [
-        "/app/click-sink",
         "api",
         "--store=pg",
         "--pg-dsn=postgres://sink:sink@postgres:5432/click_sink?sslmode=disable",
@@ -100,7 +99,6 @@ services:
       dockerfile: Dockerfile
     command:
       [
-        "/app/click-sink",
         "worker",
         "--store=pg",
         "--pg-dsn=postgres://sink:sink@postgres:5432/click_sink?sslmode=disable",
