@@ -102,6 +102,7 @@ services:
       [
         "worker",
         "--store=pg",
+        "--max-slots-per-pipeline=1",
         "--pg-dsn=postgres://sink:sink@postgres:5432/click_sink?sslmode=disable",
       ]
     environment:

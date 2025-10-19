@@ -78,38 +78,49 @@ export default function PipelineMapping() {
   const add = (f: { fieldPath: string }) => {
     const edit = rowEdits[f.fieldPath];
     if (!edit || !edit.column) return;
-    setMapping((m) => ({
-      columns: [
-        ...m.columns,
-        {
-          fieldPath: f.fieldPath,
-          column: edit.column,
-          type:
-            edit.type ||
-            tableCols.find((c) => c.name === edit.column)?.type ||
-            "String",
-        },
-      ],
-    }));
+    const colType =
+      edit.type ||
+      tableCols.find((c) => c.name === edit.column)?.type ||
+      "String";
+    setMapping((m) => {
+      const idx = m.columns.findIndex((c) => c.fieldPath === f.fieldPath);
+      if (idx >= 0) {
+        const next = [...m.columns];
+        next[idx] = { ...next[idx], column: edit.column, type: colType };
+        return { columns: next };
+      }
+      return {
+        columns: [
+          ...m.columns,
+          { fieldPath: f.fieldPath, column: edit.column, type: colType },
+        ],
+      };
+    });
   };
   const addAll = () => {
-    const rows = fields
+    const selected = fields
       .map((f) => ({ f, edit: rowEdits[f.fieldPath] }))
-      .filter(
-        (r) =>
-          r.edit &&
-          r.edit.column &&
-          !mapping.columns.some((c) => c.fieldPath === r.f.fieldPath)
-      )
-      .map((r) => ({
-        fieldPath: r.f.fieldPath,
-        column: r.edit!.column,
-        type:
+      .filter((r) => r.edit && r.edit.column);
+    setMapping((m) => {
+      const next = [...m.columns];
+      for (const r of selected) {
+        const colType =
           r.edit!.type ||
           tableCols.find((c) => c.name === r.edit!.column)?.type ||
-          "String",
-      }));
-    setMapping((m) => ({ columns: [...m.columns, ...rows] }));
+          "String";
+        const idx = next.findIndex((c) => c.fieldPath === r.f.fieldPath);
+        if (idx >= 0) {
+          next[idx] = { ...next[idx], column: r.edit!.column, type: colType };
+        } else {
+          next.push({
+            fieldPath: r.f.fieldPath,
+            column: r.edit!.column!,
+            type: colType,
+          });
+        }
+      }
+      return { columns: next };
+    });
   };
   const save = async () => {
     if (typeof id !== "string") return;
@@ -264,15 +275,11 @@ export default function PipelineMapping() {
                   </td>
                   <td>
                     <button
-                      disabled={
-                        mapping.columns.some(
-                          (c) => c.fieldPath === f.fieldPath
-                        ) || !rowEdits[f.fieldPath]?.column
-                      }
+                      disabled={!rowEdits[f.fieldPath]?.column}
                       onClick={() => add(f)}
                     >
                       {mapping.columns.some((c) => c.fieldPath === f.fieldPath)
-                        ? "Added"
+                        ? "Update"
                         : rowEdits[f.fieldPath]?.column
                         ? "Add"
                         : "Select column"}
