@@ -170,6 +170,24 @@ func (s *FSStore) PutMappingYAML(ctx context.Context, id string, y []byte) error
 	return os.WriteFile(filepath.Join(s.pipelinesDir(), id, "mapping.yaml"), y, 0o644)
 }
 
+func (s *FSStore) GetFilterConfig(ctx context.Context, id string) (*config.FilterConfig, error) {
+	b, err := os.ReadFile(filepath.Join(s.pipelinesDir(), id, "filters.yaml"))
+	if err != nil {
+		return &config.FilterConfig{Enabled: false, Language: "CEL", Expression: ""}, nil
+	}
+	var f config.FilterConfig
+	_ = yaml.Unmarshal(b, &f)
+	if f.Language == "" {
+		f.Language = "CEL"
+	}
+	return &f, nil
+}
+
+func (s *FSStore) PutFilterConfig(ctx context.Context, id string, cfg *config.FilterConfig) error {
+	by, _ := yaml.Marshal(cfg)
+	return os.WriteFile(filepath.Join(s.pipelinesDir(), id, "filters.yaml"), by, 0o644)
+}
+
 func (s *FSStore) GetState(ctx context.Context, id string) (*PipelineState, error) {
 	var st PipelineState
 	b, err := os.ReadFile(filepath.Join(s.pipelinesDir(), id, "state.json"))

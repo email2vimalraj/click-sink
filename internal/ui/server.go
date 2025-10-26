@@ -15,6 +15,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	ch "github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
+	"github.com/yourname/click-sink/internal/filter"
 	kaf "github.com/yourname/click-sink/internal/kafka"
 	"github.com/yourname/click-sink/internal/metrics"
 	"github.com/yourname/click-sink/internal/pipeline"
@@ -29,11 +30,6 @@ type Server struct {
 	mu      sync.Mutex
 	cfg     *config.Config // legacy single-pipeline fields (kept for backward compatibility/UI page)
 	mapping *schema.Mapping
-	running bool
-	cancel  context.CancelFunc
-	lastErr string
-	started time.Time
-	stats   *stats
 
 	// multi-pipeline support
 	pipelines map[string]*pipelineRuntime
@@ -211,23 +207,6 @@ func (s *Server) createPipeline(name string, description string) (*pipelineRunti
 	s.pipelines[p.ID] = pr
 	s.mu.Unlock()
 	return pr, nil
-}
-
-func sanitizeID(s string) string {
-	out := make([]rune, 0, len(s))
-	for _, r := range s {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_' {
-			out = append(out, r)
-		} else if r == ' ' {
-			out = append(out, '-')
-		} else {
-			out = append(out, '-')
-		}
-	}
-	if len(out) == 0 {
-		return "pl-" + strconv.FormatInt(time.Now().Unix(), 10)
-	}
-	return string(out)
 }
 
 // --- Multi-pipeline handlers ---
@@ -494,6 +473,52 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			}
 			pr.cfg.Kafka = kcfg
 			if err := s.store.PutKafkaConfig(r.Context(), pr.id, &kcfg); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			pr.updatedAt = time.Now()
+			_ = s.store.UpdatePipeline(r.Context(), pr.id, pr.name, pr.description)
+			s.corsJSON(w)
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+		return
+	case "filters-config":
+		switch r.Method {
+		case http.MethodGet:
+			s.corsJSON(w)
+			var fcfg config.FilterConfig
+			if pr.cfg != nil {
+				fcfg = pr.cfg.Filters
+			} else if fc, err := s.store.GetFilterConfig(r.Context(), pr.id); err == nil && fc != nil {
+				fcfg = *fc
+			}
+			_ = json.NewEncoder(w).Encode(fcfg)
+		case http.MethodPut:
+			var fcfg config.FilterConfig
+			if err := json.NewDecoder(r.Body).Decode(&fcfg); err != nil {
+				http.Error(w, err.Error(), 400)
+				return
+			}
+			// Validate expression if enabled (CEL)
+			if fcfg.Enabled {
+				lang := strings.ToUpper(strings.TrimSpace(fcfg.Language))
+				if lang == "" || lang == "CEL" {
+					if _, err := filter.NewCEL(fcfg.Expression, true); err != nil {
+						http.Error(w, "invalid filter expression: "+err.Error(), 400)
+						return
+					}
+				} else {
+					http.Error(w, "unsupported filter language", 400)
+					return
+				}
+			}
+			if pr.cfg == nil {
+				pr.cfg = &config.Config{}
+			}
+			pr.cfg.Filters = fcfg
+			if err := s.store.PutFilterConfig(r.Context(), pr.id, &fcfg); err != nil {
 				http.Error(w, err.Error(), 500)
 				return
 			}

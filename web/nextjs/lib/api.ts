@@ -85,6 +85,13 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(cfg),
     }),
+  getFilterConfig: (id: string) =>
+    json<any>(`/api/pipelines/${id}/filters-config`),
+  saveFilterConfig: (id: string, cfg: any) =>
+    json(`/api/pipelines/${id}/filters-config`, {
+      method: "PUT",
+      body: JSON.stringify(cfg),
+    }),
   // Validation endpoints
   validateKafka: (id: string) =>
     json(`/api/pipelines/${id}/validate/kafka`, { method: "POST" }),

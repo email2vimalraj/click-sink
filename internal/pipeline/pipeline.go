@@ -11,6 +11,7 @@ import (
 	"github.com/IBM/sarama"
 	"github.com/yourname/click-sink/internal/clickhouse"
 	"github.com/yourname/click-sink/internal/config"
+	"github.com/yourname/click-sink/internal/filter"
 	kfk "github.com/yourname/click-sink/internal/kafka"
 	"github.com/yourname/click-sink/internal/metrics"
 	"github.com/yourname/click-sink/internal/schema"
@@ -26,6 +27,8 @@ type Pipeline struct {
 	obs        Observer
 	totalRows  int64
 	claimObs   kfk.ClaimObserver
+	filtMu     sync.RWMutex
+	filt       *filter.Evaluator
 }
 
 // Observer provides callbacks for pipeline events.
@@ -42,7 +45,11 @@ func New(cfg *config.Config, m *schema.Mapping) (*Pipeline, error) {
 		return nil, err
 	}
 	dur, _ := time.ParseDuration(cfg.ClickHouse.BatchFlushInterval)
-	return &Pipeline{cfg: cfg, mapg: m, ch: client, batchSize: cfg.ClickHouse.BatchSize, flushEvery: dur, insertRate: cfg.ClickHouse.InsertRatePerSec}, nil
+	p := &Pipeline{cfg: cfg, mapg: m, ch: client, batchSize: cfg.ClickHouse.BatchSize, flushEvery: dur, insertRate: cfg.ClickHouse.InsertRatePerSec}
+	if err := p.ReloadFilter(&cfg.Filters); err != nil {
+		return nil, err
+	}
+	return p, nil
 }
 
 // NewWithObserver constructs a Pipeline with an observer for metrics.
@@ -152,7 +159,7 @@ func (p *Pipeline) Run(ctx context.Context) error {
 				}
 				return err
 			}
-			row, ok := p.mapMessage(m.Value)
+			row, ok := p.mapMessageWithFilter(m.Value)
 			if !ok {
 				m.Ack()
 				continue
@@ -190,6 +197,57 @@ func (p *Pipeline) mapMessage(b []byte) (clickhouse.Row, bool) {
 		row[i] = coerce(val, c.Type)
 	}
 	return row, true
+}
+
+func (p *Pipeline) mapMessageWithFilter(b []byte) (clickhouse.Row, bool) {
+	var v any
+	if err := json.Unmarshal(b, &v); err != nil {
+		return nil, false
+	}
+	flat := flatten("", v)
+	p.filtMu.RLock()
+	f := p.filt
+	p.filtMu.RUnlock()
+	if f != nil && !f.Allow(flat) {
+		return nil, false
+	}
+	row := make([]any, len(p.mapg.Columns))
+	for i, c := range p.mapg.Columns {
+		val, ok := flat[c.FieldPath]
+		if !ok {
+			row[i] = nil
+			continue
+		}
+		row[i] = coerce(val, c.Type)
+	}
+	return row, true
+}
+
+// ReloadFilter compiles and swaps in a new filter evaluator at runtime.
+func (p *Pipeline) ReloadFilter(fc *config.FilterConfig) error {
+	lang := ""
+	if fc != nil {
+		lang = strings.ToUpper(strings.TrimSpace(fc.Language))
+	}
+	// Only CEL supported for now
+	if fc == nil || !fc.Enabled {
+		p.filtMu.Lock()
+		p.filt = nil
+		p.filtMu.Unlock()
+		return nil
+	}
+	if lang == "" || lang == "CEL" {
+		ev, err := filter.NewCEL(fc.Expression, true)
+		if err != nil {
+			return err
+		}
+		p.filtMu.Lock()
+		p.filt = ev
+		p.filtMu.Unlock()
+		return nil
+	}
+	// Unsupported languages are ignored gracefully
+	return nil
 }
 
 func flatten(prefix string, v any) map[string]any {

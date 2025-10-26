@@ -49,6 +49,20 @@ type ClickHouseConfig struct {
 type Config struct {
 	Kafka      KafkaConfig      `yaml:"kafka"`
 	ClickHouse ClickHouseConfig `yaml:"clickhouse"`
+	Filters    FilterConfig     `yaml:"filters"`
+}
+
+// FilterConfig defines message filtering behavior before mapping/insertion.
+// If Enabled is true, an expression is evaluated per message. When it yields true,
+// the message is kept; when false, the message is dropped.
+// Language currently supports "CEL" (Common Expression Language). The expression
+// evaluates against a variable named "flat" which is a map<string, dyn> of flattened
+// JSON fields (e.g., flat["user.id"], flat["event.type"]). Use string()/int()/double()
+// casts and the built-in RE2 regex function matches() for regex filtering.
+type FilterConfig struct {
+	Enabled    bool   `yaml:"enabled" json:"enabled"`
+	Language   string `yaml:"language" json:"language"`     // CEL (default)
+	Expression string `yaml:"expression" json:"expression"` // e.g., flat["type"] == "purchase" && string(flat["user.email"]).matches("@example.com$")
 }
 
 func Load(path string) (*Config, error) {

@@ -83,6 +83,10 @@ type PipelineStore interface {
 	GetMappingYAML(ctx context.Context, id string) ([]byte, error)
 	PutMappingYAML(ctx context.Context, id string, y []byte) error
 
+	// Filters
+	GetFilterConfig(ctx context.Context, id string) (*config.FilterConfig, error)
+	PutFilterConfig(ctx context.Context, id string, cfg *config.FilterConfig) error
+
 	// Desired state
 	GetState(ctx context.Context, id string) (*PipelineState, error)
 	SetDesiredState(ctx context.Context, id string, desired DesiredState, replicas int) error

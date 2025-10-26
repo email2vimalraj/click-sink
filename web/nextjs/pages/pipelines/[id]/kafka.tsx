@@ -130,6 +130,10 @@ export default function PipelineKafka() {
           >
             ClickHouse
           </Link>
+          <span className="mx-2 text-slate-300">|</span>
+          <Link className="hover:underline" href={`/pipelines/${id}/filters`}>
+            Filters
+          </Link>
         </p>
         <h1>Pipeline {id} - Kafka</h1>
         {err && <p className="mb-2 text-sm text-red-600">{err}</p>}

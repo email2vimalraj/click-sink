@@ -6,6 +6,7 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -120,7 +121,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 		if desiredStart {
 			// Ensure structure
 			if rp == nil {
-				rp = &runningPipeline{slots: map[int]context.CancelFunc{}}
+				rp = &runningPipeline{slots: map[int]context.CancelFunc{}, pls: map[int]*pipeline.Pipeline{}}
 				r.mu.Lock()
 				r.running[p.ID] = rp
 				r.mu.Unlock()
@@ -137,6 +138,9 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 						log.Printf("worker: %s missing configs", p.ID)
 					} else {
 						cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+						if fc, err := r.Store.GetFilterConfig(ctx, p.ID); err == nil && fc != nil {
+							cfg.Filters = *fc
+						}
 						y, _ := r.Store.GetMappingYAML(ctx, p.ID)
 						if len(y) == 0 {
 							log.Printf("worker: %s missing mapping", p.ID)
@@ -153,6 +157,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 								runCtx, cancel := context.WithCancel(ctx)
 								r.mu.Lock()
 								rp.slots[0] = cancel
+								rp.pls[0] = pl
 								r.mu.Unlock()
 								go func(pid string) {
 									obs.OnStart()
@@ -164,6 +169,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 									obs.OnStop()
 									r.mu.Lock()
 									delete(rp.slots, 0)
+									delete(rp.pls, 0)
 									r.mu.Unlock()
 								}(p.ID)
 							}
@@ -209,6 +215,9 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 									_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
 								} else {
 									cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+									if fc, err := r.Store.GetFilterConfig(ctx, p.ID); err == nil && fc != nil {
+										cfg.Filters = *fc
+									}
 									y, _ := r.Store.GetMappingYAML(ctx, p.ID)
 									if len(y) == 0 {
 										log.Printf("worker: %s missing mapping", p.ID)
@@ -228,6 +237,10 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 											runCtx, cancel := context.WithCancel(ctx)
 											r.mu.Lock()
 											rp.slots[slot] = cancel
+											if rp.pls == nil {
+												rp.pls = map[int]*pipeline.Pipeline{}
+											}
+											rp.pls[slot] = pl
 											r.mu.Unlock()
 											go func(pid string, sl int) {
 												obs.OnStart()
@@ -239,6 +252,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 												obs.OnStop()
 												r.mu.Lock()
 												delete(rp.slots, sl)
+												delete(rp.pls, sl)
 												r.mu.Unlock()
 												_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
 											}(p.ID, slot)
@@ -263,6 +277,9 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 							_ = r.Store.ReleaseSlot(ctx, p.ID, r.WorkerID, slot)
 						} else {
 							cfg := &config.Config{Kafka: *kcfg, ClickHouse: *hcfg}
+							if fc, err := r.Store.GetFilterConfig(ctx, p.ID); err == nil && fc != nil {
+								cfg.Filters = *fc
+							}
 							y, _ := r.Store.GetMappingYAML(ctx, p.ID)
 							if len(y) == 0 {
 								log.Printf("worker: %s missing mapping", p.ID)
@@ -282,6 +299,10 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 									runCtx, cancel := context.WithCancel(ctx)
 									r.mu.Lock()
 									rp.slots[slot] = cancel
+									if rp.pls == nil {
+										rp.pls = map[int]*pipeline.Pipeline{}
+									}
+									rp.pls[slot] = pl
 									r.mu.Unlock()
 									go func(pid string, sl int) {
 										obs.OnStart()
@@ -293,6 +314,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 										obs.OnStop()
 										r.mu.Lock()
 										delete(rp.slots, sl)
+										delete(rp.pls, sl)
 										r.mu.Unlock()
 										_ = r.Store.ReleaseSlot(context.Background(), pid, r.WorkerID, sl)
 									}(p.ID, slot)
@@ -386,6 +408,7 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 							r.mu.Lock()
 							cancel := rp.slots[sl]
 							delete(rp.slots, sl)
+							delete(rp.pls, sl)
 							r.mu.Unlock()
 							if cancel != nil {
 								cancel()
@@ -432,6 +455,31 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 			r.mu.Lock()
 			metrics.SetActiveAssignments(p.ID, len(rp.slots))
 			r.mu.Unlock()
+
+			// Hot-reload filters if updated
+			if fc, err := r.Store.GetFilterConfig(ctx, p.ID); err == nil && fc != nil {
+				sig := fcSignature(fc)
+				r.mu.Lock()
+				changed := rp.lastFilterSig != sig
+				if changed {
+					rp.lastFilterSig = sig
+				}
+				instances := make([]*pipeline.Pipeline, 0, len(rp.pls))
+				for _, pl := range rp.pls {
+					instances = append(instances, pl)
+				}
+				r.mu.Unlock()
+				if changed {
+					for _, pl := range instances {
+						if pl != nil {
+							if err := pl.ReloadFilter(fc); err != nil {
+								log.Printf("worker: reload filter %s: %v", p.ID, err)
+							}
+						}
+					}
+					log.Printf("worker: reloaded filters for pipeline %s", p.ID)
+				}
+			}
 		} else {
 			if isRunning {
 				// stop all owned slots
@@ -451,7 +499,22 @@ func (r *Runner) reconcileOnce(ctx context.Context) error {
 	return nil
 }
 
-type runningPipeline struct{ slots map[int]context.CancelFunc }
+type runningPipeline struct {
+	slots         map[int]context.CancelFunc
+	pls           map[int]*pipeline.Pipeline
+	lastFilterSig string
+}
+
+func fcSignature(fc *config.FilterConfig) string {
+	if fc == nil {
+		return ""
+	}
+	on := "0"
+	if fc.Enabled {
+		on = "1"
+	}
+	return strings.ToUpper(strings.TrimSpace(fc.Language)) + "|" + on + "|" + fc.Expression
+}
 
 type logObserver struct {
 	pipelineID string

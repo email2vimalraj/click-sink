@@ -12,17 +12,40 @@ docker compose up -d
 
 2. Start the UI using Postgres store (recommended):
 
+## Filters (message-level)
+
+You can define message filters that run before mapping and insertion. Filters are evaluated per Kafka message on the flattened JSON payload.
+
+- Language: CEL (Common Expression Language)
+- Context: `flat` is a map<string, dyn> of flattened JSON fields. Example keys: `flat["user.id"]`, `flat["event.type"]`.
+- Use `matches()` for regex and type casts like `string()`, `int()`, `double()`, `bool()` as needed.
+
+Examples:
+
+- Keep only purchases:
+
+  `flat["event.type"] == "purchase"`
+
+- Keep if email ends with @example.com and value > 100:
+
+  `string(flat["user.email"]).matches("@example.com$") && int(flat["value"]) > 100`
+
+- Drop messages where user.id is missing:
+
+  `flat["user.id"] != null`
+
+UI: Pipeline → Filters → Enable, choose CEL, and enter expression. Save, then start the pipeline.
+
+Notes:
+
+- Filters run in the worker processes. Schema inference and sampling are unaffected.
+- Invalid expressions are rejected by the API on save.
+
 ```bash
 go run ./cmd/click-sink ui --store=pg --pg-dsn="postgres://sink:sink@localhost:5432/click_sink?sslmode=disable" --listen=:8081
 ```
 
-3. Open the UI at http://localhost:8081 and create a pipeline. Fill Kafka and ClickHouse configs, use “Validate” to check connectivity, click “Sample” to infer a mapping, then save the mapping.
-
-4. Start a worker to run pipelines according to desired state:
-
-```bash
-go run ./cmd/click-sink worker --store=pg --pg-dsn="postgres://sink:sink@localhost:5432/click_sink?sslmode=disable" --interval=5s --lease-ttl=20s
-```
+````
 
 In the UI Run tab, set desired state to "started" and adjust replicas. Workers will acquire per-replica slots and run consumers.
 
@@ -65,7 +88,7 @@ For a deeper explanation of replicas, slots, leases, scenarios, and the alternat
 
 ```bash
 go build ./...
-```
+````
 
 - Lint (vet):
 

@@ -52,6 +52,10 @@ func (s *PGStore) migrate() error {
             pipeline_id TEXT PRIMARY KEY REFERENCES pipelines(id) ON DELETE CASCADE,
             yaml TEXT NOT NULL
         )`,
+		`CREATE TABLE IF NOT EXISTS filter_configs (
+			pipeline_id TEXT PRIMARY KEY REFERENCES pipelines(id) ON DELETE CASCADE,
+			yaml TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS pipeline_state (
             pipeline_id TEXT PRIMARY KEY REFERENCES pipelines(id) ON DELETE CASCADE,
             desired TEXT NOT NULL DEFAULT 'stopped',
@@ -219,6 +223,35 @@ func (s *PGStore) GetMappingYAML(ctx context.Context, id string) ([]byte, error)
 func (s *PGStore) PutMappingYAML(ctx context.Context, id string, y []byte) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO mappings(pipeline_id,yaml) VALUES($1,$2)
         ON CONFLICT(pipeline_id) DO UPDATE SET yaml=EXCLUDED.yaml`, id, string(y))
+	return err
+}
+
+func (s *PGStore) GetFilterConfig(ctx context.Context, id string) (*config.FilterConfig, error) {
+	var y string
+	err := s.db.QueryRowContext(ctx, `SELECT yaml FROM filter_configs WHERE pipeline_id=$1`, id).Scan(&y)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return &config.FilterConfig{Enabled: false, Language: "CEL", Expression: ""}, nil
+		}
+		return nil, err
+	}
+	var fc config.FilterConfig
+	if err := yaml.Unmarshal([]byte(y), &fc); err != nil {
+		return nil, err
+	}
+	if fc.Language == "" {
+		fc.Language = "CEL"
+	}
+	return &fc, nil
+}
+
+func (s *PGStore) PutFilterConfig(ctx context.Context, id string, cfg *config.FilterConfig) error {
+	by, err := yaml.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO filter_configs(pipeline_id,yaml) VALUES($1,$2)
+		ON CONFLICT(pipeline_id) DO UPDATE SET yaml=EXCLUDED.yaml`, id, string(by))
 	return err
 }
 
