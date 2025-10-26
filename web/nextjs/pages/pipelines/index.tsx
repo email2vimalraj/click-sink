@@ -65,16 +65,28 @@ export default function PipelinesPage() {
                   Create pipeline
                 </Dialog.Title>
                 <div className="mt-4 space-y-3">
-                  <input
-                    placeholder="name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                  <input
-                    placeholder="description"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                  />
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="pl-name" className="text-sm text-slate-700">
+                      Name
+                    </label>
+                    <input
+                      id="pl-name"
+                      placeholder="name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <label htmlFor="pl-desc" className="text-sm text-slate-700">
+                      Description
+                    </label>
+                    <input
+                      id="pl-desc"
+                      placeholder="description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                    />
+                  </div>
                 </div>
                 <div className="mt-5 flex justify-end gap-2">
                   <Dialog.Close asChild>

@@ -91,29 +91,47 @@ export default function PipelineKafka() {
         {status && <p className="mb-2 text-sm text-green-700">{status}</p>}
         {notice && <p className="mb-2 text-sm text-slate-600">{notice}</p>}
         <div className="grid grid-cols-1 gap-3">
-          <input
-            placeholder="brokers (comma separated)"
-            value={(cfg.brokers || cfg.Brokers || []).join(",")}
-            onChange={(e) =>
-              setCfg({
-                ...cfg,
-                brokers: e.target.value
-                  .split(",")
-                  .map((s) => s.trim())
-                  .filter(Boolean),
-              })
-            }
-          />
-          <input
-            placeholder="topic"
-            value={cfg.topic || cfg.Topic || ""}
-            onChange={(e) => setCfg({ ...cfg, topic: e.target.value })}
-          />
-          <input
-            placeholder="groupID"
-            value={cfg.groupID || cfg.groupId || cfg.GroupID || ""}
-            onChange={(e) => setCfg({ ...cfg, groupID: e.target.value })}
-          />
+          <div className="flex flex-col gap-1">
+            <label htmlFor="kafka-brokers" className="text-sm text-slate-700">
+              Brokers (comma separated)
+            </label>
+            <input
+              id="kafka-brokers"
+              placeholder="kafka:9092"
+              value={(cfg.brokers || cfg.Brokers || []).join(",")}
+              onChange={(e) =>
+                setCfg({
+                  ...cfg,
+                  brokers: e.target.value
+                    .split(",")
+                    .map((s) => s.trim())
+                    .filter(Boolean),
+                })
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="kafka-topic" className="text-sm text-slate-700">
+              Topic
+            </label>
+            <input
+              id="kafka-topic"
+              placeholder="topic"
+              value={cfg.topic || cfg.Topic || ""}
+              onChange={(e) => setCfg({ ...cfg, topic: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="kafka-group" className="text-sm text-slate-700">
+              Consumer Group ID
+            </label>
+            <input
+              id="kafka-group"
+              placeholder="groupID"
+              value={cfg.groupID || cfg.groupId || cfg.GroupID || ""}
+              onChange={(e) => setCfg({ ...cfg, groupID: e.target.value })}
+            />
+          </div>
         </div>
         <div className="mt-4 flex gap-2">
           <button onClick={save}>Save</button>

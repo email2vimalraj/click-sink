@@ -94,44 +94,80 @@ export default function PipelineClickHouse() {
         {err && <p className="mb-2 text-sm text-red-600">{err}</p>}
         {status && <p className="mb-2 text-sm text-green-700">{status}</p>}
         <div className="grid grid-cols-1 gap-3">
-          <input
-            placeholder="dsn"
-            value={cfg.dsn || cfg.DSN || ""}
-            onChange={(e) => setCfg({ ...cfg, dsn: e.target.value })}
-          />
-          <input
-            placeholder="database"
-            value={cfg.database || cfg.Database || ""}
-            onChange={(e) => setCfg({ ...cfg, database: e.target.value })}
-          />
-          <input
-            placeholder="table"
-            value={cfg.table || cfg.Table || ""}
-            onChange={(e) => setCfg({ ...cfg, table: e.target.value })}
-          />
-          <input
-            placeholder="batch size"
-            type="number"
-            value={cfg.batchSize || cfg.BatchSize || 0}
-            onChange={(e) =>
-              setCfg({ ...cfg, batchSize: Number(e.target.value) })
-            }
-          />
-          <input
-            placeholder="flush interval (e.g. 1s, 500ms)"
-            value={cfg.batchFlushInterval || cfg.BatchFlushInterval || ""}
-            onChange={(e) =>
-              setCfg({ ...cfg, batchFlushInterval: e.target.value })
-            }
-          />
-          <input
-            placeholder="rate/sec"
-            type="number"
-            value={cfg.insertRatePerSec || cfg.InsertRatePerSec || 0}
-            onChange={(e) =>
-              setCfg({ ...cfg, insertRatePerSec: Number(e.target.value) })
-            }
-          />
+          <div className="flex flex-col gap-1">
+            <label htmlFor="ch-dsn" className="text-sm text-slate-700">
+              DSN
+            </label>
+            <input
+              id="ch-dsn"
+              placeholder="clickhouse://default:@clickhouse:9000/default"
+              value={cfg.dsn || cfg.DSN || ""}
+              onChange={(e) => setCfg({ ...cfg, dsn: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="ch-db" className="text-sm text-slate-700">
+              Database
+            </label>
+            <input
+              id="ch-db"
+              placeholder="default"
+              value={cfg.database || cfg.Database || ""}
+              onChange={(e) => setCfg({ ...cfg, database: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="ch-table" className="text-sm text-slate-700">
+              Table
+            </label>
+            <input
+              id="ch-table"
+              placeholder="events"
+              value={cfg.table || cfg.Table || ""}
+              onChange={(e) => setCfg({ ...cfg, table: e.target.value })}
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="ch-batch" className="text-sm text-slate-700">
+              Batch size
+            </label>
+            <input
+              id="ch-batch"
+              placeholder="1000"
+              type="number"
+              value={cfg.batchSize || cfg.BatchSize || 0}
+              onChange={(e) =>
+                setCfg({ ...cfg, batchSize: Number(e.target.value) })
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="ch-interval" className="text-sm text-slate-700">
+              Flush interval (e.g. 1s, 500ms)
+            </label>
+            <input
+              id="ch-interval"
+              placeholder="1s"
+              value={cfg.batchFlushInterval || cfg.BatchFlushInterval || ""}
+              onChange={(e) =>
+                setCfg({ ...cfg, batchFlushInterval: e.target.value })
+              }
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label htmlFor="ch-rate" className="text-sm text-slate-700">
+              Insert rate/sec (0 = unlimited)
+            </label>
+            <input
+              id="ch-rate"
+              placeholder="0"
+              type="number"
+              value={cfg.insertRatePerSec || cfg.InsertRatePerSec || 0}
+              onChange={(e) =>
+                setCfg({ ...cfg, insertRatePerSec: Number(e.target.value) })
+              }
+            />
+          </div>
         </div>
         <div className="mt-4 flex gap-2">
           <button onClick={save}>Save</button>

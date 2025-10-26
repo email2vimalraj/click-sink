@@ -213,7 +213,11 @@ export default function PipelineMapping() {
                     <code className="text-xs">{f.fieldPath}</code>
                   </td>
                   <td>
+                    <label htmlFor={`map-col-${i}`} className="sr-only">
+                      ClickHouse Column
+                    </label>
                     <select
+                      id={`map-col-${i}`}
                       value={rowEdits[f.fieldPath]?.column || ""}
                       onChange={(e) => {
                         const col = e.target.value;
@@ -238,7 +242,11 @@ export default function PipelineMapping() {
                     </select>
                   </td>
                   <td>
+                    <label htmlFor={`map-type-${i}`} className="sr-only">
+                      Target Type
+                    </label>
                     <select
+                      id={`map-type-${i}`}
                       value={
                         rowEdits[f.fieldPath]?.type ||
                         tableCols.find(
