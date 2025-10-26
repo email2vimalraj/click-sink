@@ -31,7 +31,17 @@ export default function PipelineFilters() {
           setEnabled(!!cfg.enabled);
           setLanguage(cfg.language || "CEL");
           setExpression(cfg.expression || "");
-          // Reset visual builder root when loading
+          // Choose mode based on presence of saved expression
+          if (
+            cfg &&
+            typeof cfg.expression === "string" &&
+            cfg.expression.trim() !== ""
+          ) {
+            setMode("cel");
+          } else {
+            setMode("visual");
+          }
+          // Initialize a fresh visual builder tree (we do not parse CEL back into rules yet)
           setRoot(newGroup());
         })
         .catch(() => {});

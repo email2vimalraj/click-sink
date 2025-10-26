@@ -487,13 +487,14 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 	case "filters-config":
 		switch r.Method {
 		case http.MethodGet:
-			s.corsJSON(w)
+			// Prefer store as source of truth; pr.cfg may not be fully hydrated at startup
 			var fcfg config.FilterConfig
-			if pr.cfg != nil {
-				fcfg = pr.cfg.Filters
-			} else if fc, err := s.store.GetFilterConfig(r.Context(), pr.id); err == nil && fc != nil {
+			if fc, err := s.store.GetFilterConfig(r.Context(), pr.id); err == nil && fc != nil {
 				fcfg = *fc
+			} else if pr.cfg != nil {
+				fcfg = pr.cfg.Filters
 			}
+			s.corsJSON(w)
 			_ = json.NewEncoder(w).Encode(fcfg)
 		case http.MethodPut:
 			var fcfg config.FilterConfig
