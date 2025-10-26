@@ -1,6 +1,14 @@
 export type BoolOp = "AND" | "OR";
 
-export type RuleOperator = "equals" | "regex";
+export type RuleOperator =
+  | "equals"
+  | "regex"
+  | "contains"
+  | "exists"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte";
 
 export type RuleNode = RuleGroup | Rule;
 
@@ -18,7 +26,7 @@ export type Rule = {
   not?: boolean;
   field: string; // flattened path, e.g., user.email
   operator: RuleOperator;
-  value: string; // string for equals/regex
+  value: string; // string for equals/regex/contains; numeric for comparisons; unused for exists
 };
 
 export function newRule(): Rule {
@@ -78,8 +86,34 @@ function ruleToCEL(r: Rule): string {
     base = `("${key}" in flat) && string(flat["${key}"]) == "${val}"`;
   } else if (r.operator === "regex") {
     base = `("${key}" in flat) && string(flat["${key}"]).matches("${val}")`;
+  } else if (r.operator === "contains") {
+    base = `("${key}" in flat) && string(flat["${key}"]).contains("${val}")`;
+  } else if (r.operator === "exists") {
+    base = `("${key}" in flat)`;
+  } else if (
+    r.operator === "gt" ||
+    r.operator === "gte" ||
+    r.operator === "lt" ||
+    r.operator === "lte"
+  ) {
+    const num = numberOrZero(r.value);
+    const op =
+      r.operator === "gt"
+        ? ">"
+        : r.operator === "gte"
+        ? ">="
+        : r.operator === "lt"
+        ? "<"
+        : "<=";
+    base = `("${key}" in flat) && double(flat["${key}"]) ${op} ${num}`;
   }
   return r.not ? `!(${base})` : base;
+}
+
+function numberOrZero(s: string): string {
+  const n = Number(s);
+  if (Number.isFinite(n)) return String(n);
+  return "0";
 }
 
 // Attempt a very naive parse for simple expressions produced by this builder.

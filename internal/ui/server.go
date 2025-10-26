@@ -530,6 +530,48 @@ func (s *Server) handleAPIPipeline(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 		return
+	case "filters-eval":
+		if r.Method == http.MethodOptions {
+			s.cors(w)
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var req struct {
+			Expression string `json:"expression"`
+			Sample     any    `json:"sample"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		expr := strings.TrimSpace(req.Expression)
+		if expr == "" && pr.cfg != nil && pr.cfg.Filters.Enabled {
+			expr = pr.cfg.Filters.Expression
+		}
+		if expr == "" {
+			http.Error(w, "expression required", 400)
+			return
+		}
+		// Compile evaluator
+		ev, err := filter.NewCEL(expr, true)
+		if err != nil {
+			http.Error(w, "invalid filter expression: "+err.Error(), 400)
+			return
+		}
+		// Flatten sample like pipeline does
+		flat := flattenForFilter("", req.Sample)
+		ok, evalErr := ev.Evaluate(flat)
+		res := map[string]any{"result": ok}
+		if evalErr != nil {
+			res["error"] = evalErr.Error()
+		}
+		s.corsJSON(w)
+		_ = json.NewEncoder(w).Encode(res)
+		return
 	case "clickhouse-config":
 		switch r.Method {
 		case http.MethodGet:
@@ -955,6 +997,29 @@ func splitPath(s string) []string {
 }
 
 // meta persistence is handled by the store
+
+// flattenForFilter mirrors pipeline.flatten to produce a flat map for CEL
+// evaluation in the same way the running pipeline does.
+func flattenForFilter(prefix string, v any) map[string]any {
+	out := map[string]any{}
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			key := k
+			if prefix != "" {
+				key = prefix + "." + k
+			}
+			for kk, vv := range flattenForFilter(key, val) {
+				out[kk] = vv
+			}
+		}
+	case []any:
+		out[prefix] = t
+	default:
+		out[prefix] = t
+	}
+	return out
+}
 
 // --- Validation Handlers ---
 // Kafka: POST body optional; if absent, try server-level cfg or pipeline cfg

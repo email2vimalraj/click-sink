@@ -92,6 +92,14 @@ export const api = {
       method: "PUT",
       body: JSON.stringify(cfg),
     }),
+  testFilter: (id: string, expression: string, sample: any) =>
+    json<{ result: boolean; error?: string }>(
+      `/api/pipelines/${id}/filters-eval`,
+      {
+        method: "POST",
+        body: JSON.stringify({ expression, sample }),
+      }
+    ),
   // Validation endpoints
   validateKafka: (id: string) =>
     json(`/api/pipelines/${id}/validate/kafka`, { method: "POST" }),

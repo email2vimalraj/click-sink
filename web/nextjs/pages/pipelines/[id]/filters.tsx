@@ -17,6 +17,11 @@ export default function PipelineFilters() {
   const [mode, setMode] = useState<"visual" | "cel">("visual");
   const [root, setRoot] = useState<RuleGroup>(() => newGroup());
   const generatedCEL = useMemo(() => toCEL(root), [root]);
+  const [sample, setSample] = useState<string>(
+    '{\n  "event": { "type": "purchase" },\n  "user": { "email": "a@example.com" },\n  "value": 123\n}'
+  );
+  const [testResult, setTestResult] = useState<string>("");
+  const [testing, setTesting] = useState<boolean>(false);
 
   useEffect(() => {
     if (typeof id === "string") {
@@ -44,6 +49,37 @@ export default function PipelineFilters() {
     } catch (e: any) {
       setErr(String(e));
       setStatus("");
+    }
+  };
+
+  const test = async () => {
+    if (typeof id !== "string") return;
+    setTesting(true);
+    setTestResult("");
+    try {
+      const expr = mode === "visual" ? generatedCEL : expression;
+      let payload: any;
+      try {
+        payload = JSON.parse(sample);
+      } catch (e) {
+        setTestResult("Invalid JSON sample");
+        setTesting(false);
+        return;
+      }
+      const res = await api.testFilter(id, expr, payload);
+      if (res.error) {
+        setTestResult(`Error: ${res.error}`);
+      } else {
+        setTestResult(
+          res.result
+            ? "Would KEEP (passes filter)"
+            : "Would DROP (filtered out)"
+        );
+      }
+    } catch (e: any) {
+      setTestResult(String(e));
+    } finally {
+      setTesting(false);
     }
   };
 
@@ -105,7 +141,13 @@ export default function PipelineFilters() {
             <label className="text-sm text-slate-700">Mode</label>
             <select
               value={mode}
-              onChange={(e) => setMode(e.target.value as any)}
+              onChange={(e) => {
+                const next = e.target.value as "visual" | "cel";
+                setMode(next);
+                if (next === "cel") {
+                  setExpression(generatedCEL);
+                }
+              }}
             >
               <option value="visual">Visual Builder</option>
               <option value="cel">CEL Code</option>
@@ -154,6 +196,39 @@ export default function PipelineFilters() {
         </div>
         <div className="mt-4 flex gap-2">
           <button onClick={save}>Save</button>
+        </div>
+        <div className="mt-8 rounded-md border border-slate-200 p-3">
+          <h2 className="mb-2 text-base font-semibold">
+            Test against sample JSON
+          </h2>
+          <p className="mb-2 text-xs text-slate-500">
+            Paste a representative JSON payload to evaluate the current
+            expression. This simulates the pipeline's pre-mapping filter
+            evaluation using the flattened fields.
+          </p>
+          <textarea
+            rows={8}
+            value={sample}
+            onChange={(e) => setSample(e.target.value)}
+          />
+          <div className="mt-2 flex items-center gap-2">
+            <button onClick={test} disabled={testing}>
+              {testing ? "Testing..." : "Test Expression"}
+            </button>
+            {testResult && (
+              <span
+                className={`text-sm ${
+                  testResult.startsWith("Would KEEP")
+                    ? "text-green-700"
+                    : testResult.startsWith("Would DROP")
+                    ? "text-red-700"
+                    : "text-amber-700"
+                }`}
+              >
+                {testResult}
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </main>

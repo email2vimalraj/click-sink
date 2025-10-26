@@ -39,19 +39,28 @@ func NewCEL(expression string, enabled bool) (*Evaluator, error) {
 
 // Allow returns true if the message with given flattened fields should be kept.
 func (e *Evaluator) Allow(flat map[string]any) bool {
+	b, err := e.Evaluate(flat)
+	if err != nil {
+		return false
+	}
+	return b
+}
+
+// Evaluate returns the boolean result and any evaluation error.
+func (e *Evaluator) Evaluate(flat map[string]any) (bool, error) {
 	if e == nil || !e.enabled || e.prg == nil {
-		return true
+		return true, nil
 	}
 	if flat == nil {
 		flat = map[string]any{}
 	}
 	out, _, err := e.prg.Eval(map[string]any{"flat": flat})
 	if err != nil {
-		return false
+		return false, err
 	}
 	b, ok := out.Value().(bool)
 	if !ok {
-		return false
+		return false, nil
 	}
-	return b
+	return b, nil
 }

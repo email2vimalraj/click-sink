@@ -150,19 +150,36 @@ function RuleEditor({
           onChange={(e) => setOp(e.target.value as any)}
         >
           <option value="equals">equals</option>
+          <option value="contains">contains</option>
           <option value="regex">matches regex</option>
+          <option value="exists">exists</option>
+          <option value="gt">numeric &gt;</option>
+          <option value="gte">numeric &ge;</option>
+          <option value="lt">numeric &lt;</option>
+          <option value="lte">numeric &le;</option>
         </select>
       </div>
-      <div className="md:col-span-3">
-        <label className="text-xs text-slate-600">Value</label>
-        <input
-          placeholder={
-            node.operator === "regex" ? "e.g. \\.(com|org)$" : "e.g. purchase"
-          }
-          value={node.value}
-          onChange={(e) => setVal(e.target.value)}
-        />
-      </div>
+      {node.operator !== "exists" && (
+        <div className="md:col-span-3">
+          <label className="text-xs text-slate-600">Value</label>
+          <input
+            placeholder={
+              node.operator === "regex"
+                ? "e.g. \\.(com|org)$"
+                : node.operator === "contains"
+                ? "e.g. @example.com"
+                : node.operator === "gt" ||
+                  node.operator === "gte" ||
+                  node.operator === "lt" ||
+                  node.operator === "lte"
+                ? "e.g. 100"
+                : "e.g. purchase"
+            }
+            value={node.value}
+            onChange={(e) => setVal(e.target.value)}
+          />
+        </div>
+      )}
       <div className="md:col-span-1 mt-4 md:mt-6">
         <label className="inline-flex items-center gap-2 text-xs text-slate-600">
           <input

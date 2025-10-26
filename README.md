@@ -28,7 +28,7 @@ Examples:
 
 - Keep if email ends with @example.com and value > 100:
 
-  `string(flat["user.email"]).matches("@example.com$") && int(flat["value"]) > 100`
+  `string(flat["user.email"]).matches("@example.com$") && double(flat["value"]) > 100`
 
 - Drop messages where user.id is missing:
 
@@ -41,10 +41,19 @@ UI: Pipeline → Filters → Enable, then choose a mode:
 
 You can switch between modes anytime. Switching to Visual Builder does not parse arbitrary CEL back into rules yet; saving from Visual will overwrite the existing expression with the generated CEL.
 
+Operators supported by the Visual Builder:
+
+- equals: string equality
+- contains: substring check on string fields
+- matches regex: regex via `matches()`
+- exists: field presence guard (`"key" in flat`)
+- numeric >, >=, <, <=: numeric comparisons via `double()` casting
+
 Notes:
 
 - Filters run in the worker processes. Schema inference and sampling are unaffected.
 - Invalid expressions are rejected by the API on save. The Visual Builder generates expressions that guard for missing fields using `"key" in flat`.
+- Test panel: On the Filters page you can paste sample JSON and click "Test Expression" to see if a message would be kept or dropped.
 
 ```bash
 go run ./cmd/click-sink ui --store=pg --pg-dsn="postgres://sink:sink@localhost:5432/click_sink?sslmode=disable" --listen=:8081
