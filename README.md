@@ -34,12 +34,17 @@ Examples:
 
   `flat["user.id"] != null`
 
-UI: Pipeline → Filters → Enable, choose CEL, and enter expression. Save, then start the pipeline.
+UI: Pipeline → Filters → Enable, then choose a mode:
+
+- Visual Builder: compose rules with conditions (equals or regex) and logical AND/OR/NOT. The UI shows the Generated CEL preview and saves that expression under the hood.
+- CEL Code: edit the CEL expression directly.
+
+You can switch between modes anytime. Switching to Visual Builder does not parse arbitrary CEL back into rules yet; saving from Visual will overwrite the existing expression with the generated CEL.
 
 Notes:
 
 - Filters run in the worker processes. Schema inference and sampling are unaffected.
-- Invalid expressions are rejected by the API on save.
+- Invalid expressions are rejected by the API on save. The Visual Builder generates expressions that guard for missing fields using `"key" in flat`.
 
 ```bash
 go run ./cmd/click-sink ui --store=pg --pg-dsn="postgres://sink:sink@localhost:5432/click_sink?sslmode=disable" --listen=:8081
