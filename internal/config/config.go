@@ -8,13 +8,32 @@ import (
 )
 
 type KafkaConfig struct {
-	Brokers          []string `yaml:"brokers"`
-	Topic            string   `yaml:"topic"`
-	GroupID          string   `yaml:"groupId"`
-	SASLUsername     string   `yaml:"saslUsername"`
-	SASLPassword     string   `yaml:"saslPassword"`
-	SASLMechanism    string   `yaml:"saslMechanism"`
-	SecurityProtocol string   `yaml:"securityProtocol"` // PLAINTEXT or SASL_SSL
+	Brokers       []string `yaml:"brokers"`
+	Topic         string   `yaml:"topic"`
+	GroupID       string   `yaml:"groupId"`
+	SASLUsername  string   `yaml:"saslUsername"`
+	SASLPassword  string   `yaml:"saslPassword"`
+	SASLMechanism string   `yaml:"saslMechanism"`
+	// SecurityProtocol: one of PLAINTEXT, SSL, SASL_PLAINTEXT, SASL_SSL
+	SecurityProtocol string `yaml:"securityProtocol"`
+
+	// TLS/mTLS options (used when SecurityProtocol is SSL or SASL_SSL). PEM-encoded strings.
+	TLSCA                 string `yaml:"tlsCA"`
+	TLSCert               string `yaml:"tlsCert"`
+	TLSKey                string `yaml:"tlsKey"`
+	TLSInsecureSkipVerify bool   `yaml:"tlsInsecureSkipVerify"`
+	TLSServerName         string `yaml:"tlsServerName"`
+
+	// GSSAPI (Kerberos) options (used when SASLMechanism == GSSAPI)
+	GSSAPIEnabled            bool   `yaml:"gssapiEnabled"`
+	GSSAPIRealm              string `yaml:"gssapiRealm"`
+	GSSAPIServiceName        string `yaml:"gssapiServiceName"` // usually "kafka"
+	GSSAPIAuthType           string `yaml:"gssapiAuthType"`    // USER or KEYTAB
+	GSSAPIUsername           string `yaml:"gssapiUsername"`
+	GSSAPIPassword           string `yaml:"gssapiPassword"`
+	GSSAPIKeytabPath         string `yaml:"gssapiKeytabPath"`
+	GSSAPIKerberosConfigPath string `yaml:"gssapiKerberosConfigPath"`
+	GSSAPIDisablePAFXFAST    bool   `yaml:"gssapiDisablePAFXFAST"`
 }
 
 type ClickHouseConfig struct {

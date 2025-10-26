@@ -2,9 +2,12 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,40 +44,15 @@ func NewConsumerWithInitial(cfg *config.KafkaConfig, clientID string, initialOff
 }
 
 func NewConsumerWithObserver(cfg *config.KafkaConfig, clientID string, initialOffset int64, obs ClaimObserver) (*Consumer, error) {
-	sc := sarama.NewConfig()
-	sc.Version = sarama.V3_5_0_0
-	sc.ClientID = clientID
+	sc, err := buildSaramaConfig(cfg, clientID)
+	if err != nil {
+		return nil, err
+	}
 	sc.Consumer.Return.Errors = true
 	sc.Consumer.Offsets.Initial = initialOffset
 	sc.Metadata.Full = true
 	// Prefer round-robin assignment for more even distribution across members
 	sc.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
-
-	// Security
-	switch cfg.SecurityProtocol {
-	case "SASL_SSL", "SASL_PLAINTEXT":
-		sc.Net.SASL.Enable = true
-		sc.Net.SASL.User = cfg.SASLUsername
-		sc.Net.SASL.Password = cfg.SASLPassword
-		switch cfg.SASLMechanism {
-		case "PLAIN":
-			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
-		case "SCRAM-SHA-256":
-			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
-		case "SCRAM-SHA-512":
-			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
-		default:
-			// default PLAIN if provided
-			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
-		}
-		if cfg.SecurityProtocol == "SASL_SSL" {
-			sc.Net.TLS.Enable = true
-		}
-	case "PLAINTEXT", "":
-		// nothing
-	default:
-		return nil, fmt.Errorf("unsupported securityProtocol: %s", cfg.SecurityProtocol)
-	}
 
 	group, err := sarama.NewConsumerGroup(cfg.Brokers, cfg.GroupID, sc)
 	if err != nil {
@@ -177,34 +155,10 @@ func SampleDirect(ctx context.Context, cfg *config.KafkaConfig, n int) ([][]byte
 	if n <= 0 {
 		n = 100
 	}
-	// Build a client config similar to ValidateConnectivity
-	sc := sarama.NewConfig()
-	sc.Version = sarama.V3_5_0_0
-	// Security
-	switch cfg.SecurityProtocol {
-	case "SASL_SSL", "SASL_PLAINTEXT":
-		sc.Net.SASL.Enable = true
-		sc.Net.SASL.User = cfg.SASLUsername
-		sc.Net.SASL.Password = cfg.SASLPassword
-		switch cfg.SASLMechanism {
-		case "PLAIN":
-			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
-		case "SCRAM-SHA-256":
-			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
-		case "SCRAM-SHA-512":
-			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
-		default:
-			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
-		}
-		if cfg.SecurityProtocol == "SASL_SSL" {
-			sc.Net.TLS.Enable = true
-		}
-	case "PLAINTEXT", "":
-		// nothing
-	default:
-		return nil, fmt.Errorf("unsupported securityProtocol: %s", cfg.SecurityProtocol)
+	sc, err := buildSaramaConfig(cfg, "click-sink-direct")
+	if err != nil {
+		return nil, err
 	}
-
 	client, err := sarama.NewClient(cfg.Brokers, sc)
 	if err != nil {
 		return nil, err
@@ -318,32 +272,9 @@ func SamplePreferGroupThenDirect(ctx context.Context, cfg *config.KafkaConfig, n
 
 // ValidateConnectivity attempts to connect to brokers and fetch metadata for the topic.
 func ValidateConnectivity(cfg *config.KafkaConfig) error {
-	sc := sarama.NewConfig()
-	sc.Version = sarama.V3_5_0_0
-	sc.ClientID = "click-sink-validate"
-	// Security
-	switch cfg.SecurityProtocol {
-	case "SASL_SSL", "SASL_PLAINTEXT":
-		sc.Net.SASL.Enable = true
-		sc.Net.SASL.User = cfg.SASLUsername
-		sc.Net.SASL.Password = cfg.SASLPassword
-		switch cfg.SASLMechanism {
-		case "PLAIN":
-			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
-		case "SCRAM-SHA-256":
-			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA256
-		case "SCRAM-SHA-512":
-			sc.Net.SASL.Mechanism = sarama.SASLTypeSCRAMSHA512
-		default:
-			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
-		}
-		if cfg.SecurityProtocol == "SASL_SSL" {
-			sc.Net.TLS.Enable = true
-		}
-	case "PLAINTEXT", "":
-		// nothing
-	default:
-		return fmt.Errorf("unsupported securityProtocol: %s", cfg.SecurityProtocol)
+	sc, err := buildSaramaConfig(cfg, "click-sink-validate")
+	if err != nil {
+		return err
 	}
 	client, err := sarama.NewClient(cfg.Brokers, sc)
 	if err != nil {
@@ -353,4 +284,98 @@ func ValidateConnectivity(cfg *config.KafkaConfig) error {
 	// Try getting partitions for the topic, which will confirm metadata
 	_, err = client.Partitions(cfg.Topic)
 	return err
+}
+
+// buildSaramaConfig constructs a sarama.Config honoring TLS/SSL, SASL (PLAIN/SCRAM), and GSSAPI.
+func buildSaramaConfig(cfg *config.KafkaConfig, clientID string) (*sarama.Config, error) {
+	sc := sarama.NewConfig()
+	sc.Version = sarama.V3_5_0_0
+	if clientID != "" {
+		sc.ClientID = clientID
+	}
+	proto := strings.ToUpper(strings.TrimSpace(cfg.SecurityProtocol))
+	switch proto {
+	case "", "PLAINTEXT":
+		// no TLS, no SASL
+	case "SSL":
+		if err := applyTLS(sc, cfg); err != nil {
+			return nil, err
+		}
+	case "SASL_PLAINTEXT", "SASL_SSL":
+		sc.Net.SASL.Enable = true
+		mech := strings.ToUpper(strings.TrimSpace(cfg.SASLMechanism))
+		switch mech {
+		case "", "PLAIN":
+			sc.Net.SASL.Mechanism = sarama.SASLTypePlaintext
+			sc.Net.SASL.User = cfg.SASLUsername
+			sc.Net.SASL.Password = cfg.SASLPassword
+		case "SCRAM-SHA-256":
+			// SCRAM requires a client generator function; not wired in this build.
+			return nil, fmt.Errorf("SASL SCRAM-SHA-256 not supported in this build yet")
+		case "SCRAM-SHA-512":
+			return nil, fmt.Errorf("SASL SCRAM-SHA-512 not supported in this build yet")
+		case "GSSAPI", "KERBEROS":
+			sc.Net.SASL.Mechanism = sarama.SASLTypeGSSAPI
+			sc.Net.SASL.GSSAPI = sarama.GSSAPIConfig{
+				AuthType:           gssapiAuthType(cfg.GSSAPIAuthType),
+				KeyTabPath:         cfg.GSSAPIKeytabPath,
+				KerberosConfigPath: cfg.GSSAPIKerberosConfigPath,
+				ServiceName:        defaultString(cfg.GSSAPIServiceName, "kafka"),
+				Username:           cfg.GSSAPIUsername,
+				Password:           cfg.GSSAPIPassword,
+				Realm:              cfg.GSSAPIRealm,
+				DisablePAFXFAST:    cfg.GSSAPIDisablePAFXFAST,
+			}
+		default:
+			return nil, fmt.Errorf("unsupported SASL mechanism: %s", cfg.SASLMechanism)
+		}
+		if proto == "SASL_SSL" {
+			if err := applyTLS(sc, cfg); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, fmt.Errorf("unsupported securityProtocol: %s", cfg.SecurityProtocol)
+	}
+	return sc, nil
+}
+
+func applyTLS(sc *sarama.Config, cfg *config.KafkaConfig) error {
+	sc.Net.TLS.Enable = true
+	t := &tls.Config{InsecureSkipVerify: cfg.TLSInsecureSkipVerify}
+	if cfg.TLSServerName != "" {
+		t.ServerName = cfg.TLSServerName
+	}
+	if strings.TrimSpace(cfg.TLSCA) != "" {
+		pool := x509.NewCertPool()
+		if ok := pool.AppendCertsFromPEM([]byte(cfg.TLSCA)); !ok {
+			return fmt.Errorf("invalid tlsCA")
+		}
+		t.RootCAs = pool
+	}
+	if strings.TrimSpace(cfg.TLSCert) != "" && strings.TrimSpace(cfg.TLSKey) != "" {
+		cert, err := tls.X509KeyPair([]byte(cfg.TLSCert), []byte(cfg.TLSKey))
+		if err != nil {
+			return fmt.Errorf("invalid client cert/key: %w", err)
+		}
+		t.Certificates = []tls.Certificate{cert}
+	}
+	sc.Net.TLS.Config = t
+	return nil
+}
+
+func gssapiAuthType(s string) int {
+	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "KEYTAB":
+		return sarama.KRB5_KEYTAB_AUTH
+	default:
+		return sarama.KRB5_USER_AUTH
+	}
+}
+
+func defaultString(v, def string) string {
+	if strings.TrimSpace(v) == "" {
+		return def
+	}
+	return v
 }
