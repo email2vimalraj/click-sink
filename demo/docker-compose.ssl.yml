@@ -1,0 +1,49 @@
+version: "3.9"
+
+services:
+  tls-gen:
+    image: alpine:3.20
+    command: >-
+      sh -c "\
+      apk add --no-cache openssl >/dev/null && \
+      mkdir -p /certs && \
+      openssl req -x509 -newkey rsa:2048 -days 365 -nodes \
+        -subj '/CN=click-sink-local-CA' \
+        -keyout /certs/ca.key -out /certs/ca.crt && \
+      openssl req -new -newkey rsa:2048 -nodes \
+        -subj '/CN=kafka-ssl' \
+        -keyout /certs/kafka.key -out /certs/kafka.csr && \
+      openssl x509 -req -days 365 -in /certs/kafka.csr \
+        -CA /certs/ca.crt -CAkey /certs/ca.key -CAcreateserial \
+        -out /certs/kafka.crt && \
+      cat /certs/kafka.crt /certs/ca.crt > /certs/kafka.chain.crt && \
+      echo 'Generated CA at /certs/ca.crt and server cert at /certs/kafka.crt'"
+    volumes:
+      - kafka_tls_certs:/certs
+
+  kafka-ssl:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.8
+    depends_on:
+      - tls-gen
+    hostname: kafka-ssl
+    container_name: kafka-ssl
+    ports:
+      - "9094:9094"
+    command: >-
+      rpk redpanda start \
+        --overprovisioned --smp 1 --memory 512M --reserve-memory 0M \
+        --node-id 1 \
+        --advertise-kafka-addr kafka-ssl:9094 \
+        --kafka-addr 0.0.0.0:9094 \
+        --set redpanda.enable_rack_awareness=false \
+        --set redpanda.developer_mode=true \
+        --set redpanda.kafka_api_tls.enabled=true \
+        --set redpanda.kafka_api_tls.require_client_auth=false \
+        --set redpanda.kafka_api_tls.key_file=/certs/kafka.key \
+        --set redpanda.kafka_api_tls.cert_file=/certs/kafka.chain.crt \
+        --set redpanda.kafka_api_tls.truststore_file=/certs/ca.crt
+    volumes:
+      - kafka_tls_certs:/certs:ro
+
+volumes:
+  kafka_tls_certs: {}
