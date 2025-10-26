@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Head from "next/head";
 import {
   api,
   Status,
@@ -115,6 +116,13 @@ export default function PipelineRun() {
   };
   return (
     <main className="min-h-screen p-6">
+      <Head>
+        <title>
+          {typeof id === "string"
+            ? `Run - Pipeline ${id} - Click Sink`
+            : "Run - Click Sink"}
+        </title>
+      </Head>
       <div className="mx-auto max-w-4xl">
         <p className="mb-4 text-sm text-slate-600">
           <Link className="hover:underline" href={`/pipelines`}>

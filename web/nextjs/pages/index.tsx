@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import Head from "next/head";
 import { useRouter } from "next/router";
 
 export default function Home() {
@@ -6,5 +7,11 @@ export default function Home() {
   useEffect(() => {
     router.replace("/pipelines");
   }, [router]);
-  return null;
+  return (
+    <>
+      <Head>
+        <title>Click Sink</title>
+      </Head>
+    </>
+  );
 }

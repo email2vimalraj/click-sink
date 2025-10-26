@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Head from "next/head";
 import { api, Mapping } from "../../../lib/api";
 
 export default function PipelineMapping() {
@@ -133,6 +134,13 @@ export default function PipelineMapping() {
   };
   return (
     <main className="min-h-screen p-6">
+      <Head>
+        <title>
+          {typeof id === "string"
+            ? `Mapping - Pipeline ${id} - Click Sink`
+            : "Mapping - Click Sink"}
+        </title>
+      </Head>
       <div className="mx-auto max-w-5xl">
         <p className="mb-4 text-sm text-slate-600">
           <Link className="hover:underline" href={`/pipelines`}>

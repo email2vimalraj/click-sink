@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Head from "next/head";
 import { api } from "../../../lib/api";
 
 export default function PipelineKafka() {
@@ -73,6 +74,13 @@ export default function PipelineKafka() {
 
   return (
     <main className="min-h-screen p-6">
+      <Head>
+        <title>
+          {typeof id === "string"
+            ? `Kafka - Pipeline ${id} - Click Sink`
+            : "Kafka - Click Sink"}
+        </title>
+      </Head>
       <div className="mx-auto max-w-4xl">
         <p className="mb-4 text-sm text-slate-600">
           <Link className="hover:underline" href={`/pipelines`}>

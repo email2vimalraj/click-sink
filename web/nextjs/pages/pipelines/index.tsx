@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import Head from "next/head";
 import { api } from "../../lib/api";
 import * as Dialog from "@radix-ui/react-dialog";
 import * as AlertDialog from "@radix-ui/react-alert-dialog";
@@ -44,6 +45,9 @@ export default function PipelinesPage() {
 
   return (
     <main className="min-h-screen p-6">
+      <Head>
+        <title>Pipelines - Click Sink</title>
+      </Head>
       <div className="mx-auto max-w-5xl">
         <div className="mb-6 flex items-center justify-between">
           <div className="space-y-1">

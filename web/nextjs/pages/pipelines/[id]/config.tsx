@@ -1,6 +1,7 @@
 import { useRouter } from "next/router";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Head from "next/head";
 import { api } from "../../../lib/api";
 
 type KafkaCfg = any;
@@ -70,6 +71,13 @@ export default function PipelineConfig() {
 
   return (
     <main className="min-h-screen p-6">
+      <Head>
+        <title>
+          {typeof id === "string"
+            ? `Config - Pipeline ${id} - Click Sink`
+            : "Config - Click Sink"}
+        </title>
+      </Head>
       <div className="mx-auto max-w-4xl">
         <p className="mb-4 text-sm text-slate-600">
           <Link className="hover:underline" href={`/pipelines`}>
